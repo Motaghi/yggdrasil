@@ -1,0 +1,66 @@
+# Core defaults for Yggdrasil.
+schema: ygg.config.v1
+preset: starter
+tracker: files
+launcher: headless
+launcher_cli: claude-code
+vocabulary: plain
+# auto: alerts.jsonl plus delivery to the user (A11 amendment 4); jsonl keeps alerts log-only.
+alert_forwarder: auto
+# T3 versions the T3 launcher accepts; the CLI version must also equal the server version (A5.3).
+t3_supported_cli_versions: ["0.1.9"]
+t3_supported_server_versions: ["0.1.9"]
+stall_threshold_minutes: 20
+max_silence_minutes: 60
+retry_limit: 2
+settle_delay_seconds: 30
+# How one conductor tick limits its launches: both (whichever limit comes first), count or time.
+tick_cap: both
+# Most sessions one tick starts (used by count and both).
+max_launches_per_tick: 5
+# Seconds one tick may spend starting sessions (used by time and both).
+tick_budget_seconds: 240
+load_threshold: 0.85
+load_max_age_seconds: 300
+launch_confirm_seconds: 5
+startup_grace_seconds: 60
+# Seconds a node held for provider capacity waits before it is tried again.
+capacity_backoff_seconds: 300
+stop_grace_seconds: 10
+review_rounds: 5
+rehydration_line_cap: 150
+l1_lock_ttl_minutes: 30
+checkpoint_batch_hours: 4
+models:
+  model: claude-opus-5-5
+  effort: high
+  pair_model: gpt-6.1-sol
+  pair_effort: xhigh
+# Default model map when launcher_cli is codex (a Codex-only setup).
+codex_models:
+  model: gpt-6.1-sol
+  effort: high
+  pair_model: gpt-6.1-sol
+  pair_effort: xhigh
+authority:
+  actors: [user]
+branch_protection: refuse
+merge_mode: prepare
+delivery_approach_default: agile
+agile_cadence_default: flow
+# A11 settings (AC-35). merge_check_path defaults to the conductor's PATH; agent_commands comes from the approved
+# PID only (config.DEFERRED_DEFAULTS shows its default).
+stage_close: default
+agent_project_settings: exclude
+# Yggdrasil's own Claude Code folder for agents (AC-75); they sign in with the credentials in their environment.
+agent_claude_config_dir: ~/.config/yggdrasil/agent-claude
+agent_env_passthrough: []
+command_retry_limit: 3
+busy_max_minutes: 60
+needs_l1_minutes: 30
+merge_check_timeout_minutes: 60
+alert_send_timeout_seconds: 120
+alert_max_attempts: 10
+alert_tick_budget_seconds: 150
+dashboard_allowed_hosts: []
+alert_macos: "on"  # A11.1 AC-10: off on a host with no one at its screen; trusted layers only

@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+"""Leak scan for this repository.
+
+  leak-scan --staged          every staged file in full, staged file names, and the author and committer identity
+  leak-scan --message <file>  a commit message (the commit-msg hook)
+  leak-scan --history <ref>...  every commit reachable from the refs: message, identities and the content it adds
+
+A finding is a line of the denylist (case-insensitive) or a common secret shape. The denylist is named by
+$YGG_LEAK_DENYLIST, else `git config ygg.leakDenylist`; blank lines and lines starting with # are ignored. A
+configured denylist that cannot be read stops the scan. Identities listed with `git config ygg.publicIdentity`
+("Name <email>", exact) are allowed. Exit 0 when clean, 1 on any finding or read error.
+"""
+
+import os
+import re
+import subprocess
+import sys
+
+SECRET = re.compile(
+    r"sk-(?:ant|proj|svcacct|admin)-[A-Za-z0-9_-]{8,}"
+    r"|github_pat_[A-Za-z0-9_]{8,}"
+    r"|gh[opsur]_[A-Za-z0-9]{20,}"
+    r"|lin_(?:api|oauth)_[A-Za-z0-9]{8,}"
+    r"|(?:AKIA|ASIA)[A-Z0-9]{16}"
+    r"|xox[abposr]-[A-Za-z0-9-]{10,}"
+    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----")
+
+
+# A full object id (SHA-1 or SHA-256), which git never reads as a ref name.
+FULL_ID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+
+
+class ScanError(Exception):
+    pass
+
+
+# The scanner's git calls run no program a repository's config could name, matching Yggdrasil's own git
+# calls: hooks, fsmonitor, signing, editors, pager, ssh, credential helpers and transports are forced off.
+SAFETY = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "commit.gpgSign=false",
+          "-c", "tag.gpgSign=false", "-c", "gpg.program=false", "-c", "gpg.ssh.program=false",
+          "-c", "gpg.x509.program=false", "-c", "core.editor=false", "-c", "sequence.editor=false",
+          "-c", "core.pager=cat", "-c", "core.sshCommand=false", "-c", "core.askPass=false",
+          "-c", "credential.helper=", "-c", "protocol.allow=never", "-c", "diff.external="]
+# Repository-selection and program variables are dropped; GIT_INDEX_FILE stays, because a commit hook
+# must scan the index git hands it (a temporary one for `git commit <paths>`).
+DROPPED = {"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+           "GIT_NAMESPACE", "GIT_REPLACE_REF_BASE", "GIT_CONFIG", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_PARAMETERS",
+           "GIT_CONFIG_COUNT", "GIT_CEILING_DIRECTORIES", "GIT_DISCOVERY_ACROSS_FILESYSTEM", "GIT_EXTERNAL_DIFF",
+           "GIT_EDITOR", "GIT_SEQUENCE_EDITOR", "GIT_PAGER", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_ASKPASS",
+           "GIT_PROXY_COMMAND", "GIT_EXEC_PATH", "GIT_TEMPLATE_DIR"}
+
+
+def git_env():
+    environment = {k: v for k, v in os.environ.items()
+                   if k not in DROPPED and not k.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))}
+    environment.update(GIT_NO_REPLACE_OBJECTS="1", GIT_CONFIG_NOSYSTEM="1", GIT_ALLOW_PROTOCOL="",
+                       GIT_PROTOCOL_FROM_USER="0", GIT_NO_LAZY_FETCH="1")
+    return environment
+
+
+def git(*args, text=True):
+    result = subprocess.run(["git", *SAFETY, *args], capture_output=True, text=text, env=git_env())
+    if result.returncode != 0:
+        detail = result.stderr if text else result.stderr.decode("utf-8", "replace")
+        raise ScanError("git " + " ".join(args[:2]) + " failed: " + detail.strip())
+    return result.stdout
+
+
+def denylist():
+    path = os.environ.get("YGG_LEAK_DENYLIST") or \
+        subprocess.run(["git", *SAFETY, "config", "--get", "ygg.leakDenylist"], capture_output=True, text=True,
+                       env=git_env()).stdout.strip()
+    if not path:
+        print("leak-scan: no denylist configured (set YGG_LEAK_DENYLIST or git config ygg.leakDenylist)",
+              file=sys.stderr)
+        return []
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        raise ScanError("cannot read denylist " + path)
+    return [line.strip().casefold() for line in lines if line.strip() and not line.strip().startswith("#")]
+
+
+def public_identities():
+    result = subprocess.run(["git", *SAFETY, "config", "--get-all", "ygg.publicIdentity"], capture_output=True,
+                            text=True, env=git_env())
+    return {line.strip() for line in result.stdout.splitlines() if line.strip()}
+
+
+def has_term(text, terms):
+    folded = text.casefold()
+    return any(term in folded for term in terms)
+
+
+def identity_hit(identity, terms, allowed):
+    return identity not in allowed and has_term(identity, terms)
+
+
+def ident_of(variable):
+    raw = git("var", variable).strip()
+    return raw[:raw.index(">") + 1] if ">" in raw else raw
+
+
+def scan_staged(terms):
+    problems = []
+    # Each staged blob is read by its object id, never by a path git could reinterpret (":0:name").
+    fields = [f for f in git("diff", "--cached", "--raw", "-z", "--no-renames", "--no-ext-diff", "--full-index",
+                             "--no-abbrev", "--diff-filter=ACMT").split("\0") if f]
+    for index in range(0, len(fields) - 1, 2):
+        meta, name = fields[index].split(), fields[index + 1]
+        if has_term(name, terms):
+            problems.append("a staged path matches a denylist entry")
+        if len(meta) < 4 or meta[1] == "160000":
+            continue  # a submodule commit has no content here
+        if not FULL_ID.fullmatch(meta[3]):
+            raise ScanError("unexpected object id " + meta[3] + " for a staged file")
+        data = git("cat-file", "blob", meta[3], text=False).decode("utf-8", "replace")
+        if has_term(data, terms):
+            problems.append("staged content matches a denylist entry")
+        if SECRET.search(data):
+            problems.append("staged content matches a secret shape")
+    allowed = public_identities()
+    for variable in ("GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"):
+        if identity_hit(ident_of(variable), terms, allowed):
+            problems.append("author or committer identity matches a denylist entry")
+    return problems
+
+
+def scan_message(path, terms):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            # Every line counts: depending on the cleanup mode, git can keep lines that start with #.
+            text = handle.read()
+    except OSError:
+        raise ScanError("cannot read commit message " + path)
+    problems = []
+    if has_term(text, terms):
+        problems.append("commit message matches a denylist entry")
+    if SECRET.search(text):
+        problems.append("commit message matches a secret shape")
+    return problems
+
+
+def scan_history(refs, terms):
+    findings = []
+    allowed = public_identities()
+    for sha in git("rev-list", *refs).split():
+        message = git("log", "-1", "--format=%B", sha)
+        if has_term(message, terms) or SECRET.search(message):
+            findings.append(sha + " commit message")
+        for label, fmt in (("author", "%an <%ae>"), ("committer", "%cn <%ce>")):
+            if identity_hit(git("log", "-1", "--format=" + fmt, sha).strip(), terms, allowed):
+                findings.append(sha + " " + label + " identity")
+        changed = git("diff-tree", "-r", "--no-commit-id", "--root", "-m", "--no-renames", "-z", sha)
+        fields = [f for f in changed.split("\0") if f]
+        for index in range(0, len(fields) - 1, 2):
+            meta, path = fields[index].split(), fields[index + 1]
+            if len(meta) < 4 or meta[-1].startswith("D"):
+                continue
+            blob = meta[3]
+            data = git("cat-file", "blob", blob, text=False).decode("utf-8", "replace")
+            if has_term(data, terms) or SECRET.search(data):
+                findings.append(sha + " content " + path)
+            if has_term(path, terms):
+                findings.append(sha + " path " + path)
+    return sorted(set(findings))
+
+
+def main(argv):
+    try:
+        terms = denylist()
+        if argv[:1] == ["--staged"]:
+            problems = scan_staged(terms)
+        elif argv[:1] == ["--message"] and len(argv) == 2:
+            problems = scan_message(argv[1], terms)
+        elif argv[:1] == ["--history"] and len(argv) >= 2:
+            findings = scan_history(argv[1:], terms)
+            for line in findings:
+                print(line)
+            return 1 if findings else 0
+        else:
+            print(__doc__.strip(), file=sys.stderr)
+            return 2
+    except ScanError as error:
+        print("leak-scan: " + str(error), file=sys.stderr)
+        return 1
+    for problem in sorted(set(problems)):
+        print("leak-scan: " + problem, file=sys.stderr)
+    return 1 if problems else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

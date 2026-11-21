@@ -1,0 +1,9 @@
+# Starter preset: identical to the core defaults, key for key (review_rounds and alert_forwarder
+# come from the core, so explain names the core as their source).
+tracker: files
+launcher: headless
+launcher_cli: claude-code
+delivery_approach_default: agile
+agile_cadence_default: flow
+branch_protection: refuse
+vocabulary: plain

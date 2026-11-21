@@ -1,0 +1,19 @@
+schema: ygg.standard.v1
+current: 2
+versions:
+  "1":
+    work_package: {label_prefix: "lane:", states: [planned, authorised, ready-for-test, accepted, rejected, review-exhausted, suspended, merged]}
+    worker_task: {parent_field: parent}
+    decision: {labels: [decision, provisional-decision, decided]}
+    stage: {states: [planned, executing, awaiting-approval, approved, rejected]}
+    report: {kinds: [highlight, checkpoint, end-stage, end-project, lessons]}
+    document: {kinds: [brief, pid, stage-plan, product-description, route-map, northstar, journal, rehydrate, backlog]}
+  # Version 2 (A11 amendment 21, ruling 134): adds in-review, stopped and cancelled; the eight version-1 states
+  # keep their meaning. Version-1 records keep reading as version 1.
+  "2":
+    work_package: {label_prefix: "lane:", states: [planned, authorised, ready-for-test, accepted, rejected, review-exhausted, suspended, merged, in-review, stopped, cancelled]}
+    worker_task: {parent_field: parent}
+    decision: {labels: [decision, provisional-decision, decided]}
+    stage: {states: [planned, executing, awaiting-approval, approved, rejected]}
+    report: {kinds: [highlight, checkpoint, end-stage, end-project, lessons]}
+    document: {kinds: [brief, pid, stage-plan, product-description, route-map, northstar, journal, rehydrate, backlog]}

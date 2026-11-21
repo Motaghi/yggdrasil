@@ -1,0 +1,10 @@
+# Team preset: several people sharing one tracker.
+tracker: linear
+launcher: headless
+launcher_cli: claude-code
+delivery_approach_default: agile
+agile_cadence_default: flow
+branch_protection: refuse
+review_rounds: 5
+vocabulary: plain
+alert_forwarder: auto

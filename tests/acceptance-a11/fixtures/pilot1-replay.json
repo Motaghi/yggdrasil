@@ -1,0 +1,521 @@
+{
+  "pm1": {
+    "mode": "script",
+    "steps": [
+      {
+        "id": "pid-ready",
+        "run": [
+          "ygg",
+          "tracker",
+          "write",
+          "--as",
+          "pm1",
+          "--project",
+          "alpha-p1",
+          "--kind",
+          "pid-ready",
+          "--body",
+          "PID v1"
+        ]
+      },
+      {
+        "id": "plan-1",
+        "run": [
+          "ygg",
+          "tracker",
+          "write",
+          "--as",
+          "pm1",
+          "--project",
+          "alpha-p1",
+          "--stage",
+          "1",
+          "--kind",
+          "stage-plan",
+          "--body",
+          "Stage 1 plan"
+        ],
+        "when": {
+          "stage_state": {
+            "alpha-p1": {
+              "number": 1,
+              "state": "executing"
+            }
+          }
+        }
+      },
+      {
+        "id": "package-1",
+        "run": [
+          "ygg",
+          "tracker",
+          "write",
+          "--as",
+          "pm1",
+          "--project",
+          "alpha-p1",
+          "--stage",
+          "1",
+          "--package",
+          "WP-1",
+          "--kind",
+          "work-package",
+          "--body",
+          "Save module"
+        ]
+      },
+      {
+        "id": "criteria-request-1",
+        "run": [
+          "ygg",
+          "send",
+          "--from",
+          "pm1",
+          "--to",
+          "pm1su1",
+          "--kind",
+          "work",
+          "--body",
+          "write criteria for WP-1"
+        ]
+      },
+      {
+        "id": "authorise-1",
+        "run": [
+          "ygg",
+          "wp",
+          "authorise",
+          "alpha-p1",
+          "--package",
+          "WP-1",
+          "--lane",
+          "pm1tl1"
+        ],
+        "when": {
+          "has_criteria": "WP-1"
+        }
+      },
+      {
+        "id": "merge-1",
+        "run": [
+          "ygg",
+          "merge",
+          "lane",
+          "alpha-p1",
+          "--lane",
+          "pm1tl1",
+          "--repo",
+          "<repo-a>"
+        ],
+        "when": {
+          "package_state": {
+            "WP-1": "accepted"
+          }
+        }
+      },
+      {
+        "id": "report-1",
+        "write_file": {
+          "path": "end-stage-1.md",
+          "text": "# End of stage 1\n"
+        }
+      },
+      {
+        "id": "end-1",
+        "run": [
+          "ygg",
+          "stage",
+          "end",
+          "alpha-p1",
+          "--within-tolerance",
+          "yes",
+          "--report",
+          "end-stage-1.md"
+        ]
+      },
+      {
+        "id": "plan-2",
+        "run": [
+          "ygg",
+          "tracker",
+          "write",
+          "--as",
+          "pm1",
+          "--project",
+          "alpha-p1",
+          "--stage",
+          "2",
+          "--kind",
+          "stage-plan",
+          "--body",
+          "Stage 2 plan"
+        ],
+        "when": {
+          "stage_state": {
+            "alpha-p1": {
+              "number": 2,
+              "state": "executing"
+            }
+          }
+        }
+      },
+      {
+        "id": "package-2",
+        "run": [
+          "ygg",
+          "tracker",
+          "write",
+          "--as",
+          "pm1",
+          "--project",
+          "alpha-p1",
+          "--stage",
+          "2",
+          "--package",
+          "WP-2",
+          "--kind",
+          "work-package",
+          "--body",
+          "Load module"
+        ]
+      },
+      {
+        "id": "criteria-request-2",
+        "run": [
+          "ygg",
+          "send",
+          "--from",
+          "pm1",
+          "--to",
+          "pm1su1",
+          "--kind",
+          "work",
+          "--body",
+          "write criteria for WP-2"
+        ]
+      },
+      {
+        "id": "authorise-2",
+        "run": [
+          "ygg",
+          "wp",
+          "authorise",
+          "alpha-p1",
+          "--package",
+          "WP-2",
+          "--lane",
+          "pm1tl1"
+        ],
+        "when": {
+          "has_criteria": "WP-2"
+        }
+      },
+      {
+        "id": "merge-2",
+        "run": [
+          "ygg",
+          "merge",
+          "lane",
+          "alpha-p1",
+          "--lane",
+          "pm1tl1",
+          "--repo",
+          "<repo-a>"
+        ],
+        "when": {
+          "package_state": {
+            "WP-2": "accepted"
+          }
+        }
+      },
+      {
+        "id": "report-2",
+        "write_file": {
+          "path": "end-stage-2.md",
+          "text": "# End of stage 2\n"
+        }
+      },
+      {
+        "id": "end-2",
+        "run": [
+          "ygg",
+          "stage",
+          "end",
+          "alpha-p1",
+          "--within-tolerance",
+          "yes",
+          "--report",
+          "end-stage-2.md"
+        ]
+      }
+    ],
+    "guarded": true,
+    "posttool": true
+  },
+  "pm1tl1": {
+    "mode": "script",
+    "steps": [
+      {
+        "id": "file-1",
+        "when": {
+          "package_state": {
+            "WP-1": "authorised"
+          }
+        },
+        "write_file": {
+          "path": "module1.txt",
+          "text": "Save module\n"
+        }
+      },
+      {
+        "id": "add-1",
+        "run": [
+          "git",
+          "add",
+          "module1.txt"
+        ]
+      },
+      {
+        "id": "commit-1",
+        "run": [
+          "git",
+          "commit",
+          "-m",
+          "WP-1"
+        ]
+      },
+      {
+        "id": "ready-1",
+        "run": [
+          "ygg",
+          "wp",
+          "ready",
+          "--from",
+          "pm1tl1",
+          "--package",
+          "WP-1"
+        ]
+      },
+      {
+        "id": "file-2",
+        "when": {
+          "package_state": {
+            "WP-2": "authorised"
+          }
+        },
+        "write_file": {
+          "path": "module2.txt",
+          "text": "Load module\n"
+        }
+      },
+      {
+        "id": "add-2",
+        "run": [
+          "git",
+          "add",
+          "module2.txt"
+        ]
+      },
+      {
+        "id": "commit-2",
+        "run": [
+          "git",
+          "commit",
+          "-m",
+          "WP-2"
+        ]
+      },
+      {
+        "id": "ready-2",
+        "run": [
+          "ygg",
+          "wp",
+          "ready",
+          "--from",
+          "pm1tl1",
+          "--package",
+          "WP-2"
+        ]
+      },
+      {
+        "id": "ready-2-again",
+        "run": [
+          "ygg",
+          "wp",
+          "ready",
+          "--from",
+          "pm1tl1",
+          "--package",
+          "WP-2"
+        ],
+        "when": {
+          "package_state": {
+            "WP-2": "rejected"
+          }
+        }
+      }
+    ],
+    "guarded": true,
+    "posttool": true
+  },
+  "pm1su1": {
+    "mode": "script",
+    "steps": [
+      {
+        "id": "criteria-1",
+        "run": [
+          "ygg",
+          "tracker",
+          "write",
+          "--as",
+          "pm1su1",
+          "--project",
+          "alpha-p1",
+          "--package",
+          "WP-1",
+          "--kind",
+          "criteria",
+          "--body",
+          "WP-1"
+        ],
+        "when": {
+          "stage_state": {
+            "alpha-p1": {
+              "number": 1,
+              "state": "executing"
+            }
+          }
+        }
+      },
+      {
+        "id": "accept-1",
+        "run": [
+          "ygg",
+          "acceptance",
+          "record",
+          "--from",
+          "pm1su1",
+          "--package",
+          "WP-1",
+          "--sha",
+          "{head:ygg/alpha-p1/lane/pm1tl1}",
+          "--verdict",
+          "accept"
+        ],
+        "when": {
+          "package_state": {
+            "WP-1": "ready-for-test"
+          }
+        }
+      },
+      {
+        "id": "criteria-2",
+        "run": [
+          "ygg",
+          "tracker",
+          "write",
+          "--as",
+          "pm1su1",
+          "--project",
+          "alpha-p1",
+          "--package",
+          "WP-2",
+          "--kind",
+          "criteria",
+          "--body",
+          "WP-2"
+        ],
+        "when": {
+          "stage_state": {
+            "alpha-p1": {
+              "number": 2,
+              "state": "executing"
+            }
+          }
+        }
+      },
+      {
+        "id": "reject-2",
+        "run": [
+          "ygg",
+          "acceptance",
+          "record",
+          "--from",
+          "pm1su1",
+          "--package",
+          "WP-2",
+          "--sha",
+          "{head:ygg/alpha-p1/lane/pm1tl1}",
+          "--verdict",
+          "reject"
+        ],
+        "when": {
+          "package_state": {
+            "WP-2": "ready-for-test"
+          }
+        }
+      },
+      {
+        "id": "accept-2",
+        "run": [
+          "ygg",
+          "acceptance",
+          "record",
+          "--from",
+          "pm1su1",
+          "--package",
+          "WP-2",
+          "--sha",
+          "{head:ygg/alpha-p1/lane/pm1tl1}",
+          "--verdict",
+          "accept"
+        ],
+        "when": {
+          "package_state": {
+            "WP-2": "ready-for-test"
+          }
+        }
+      }
+    ],
+    "guarded": true,
+    "posttool": true
+  },
+  "pm1rv1": [
+    {
+      "mode": "script",
+      "steps": [
+        {
+          "id": "verdict-1",
+          "write_file": {
+            "path": "{env:YGG_REVIEW_DIR}/verdict.json",
+            "text": "{\"review\": \"rv-0001\", \"verdict\": \"approve\"}"
+          }
+        }
+      ]
+    },
+    {
+      "mode": "script",
+      "steps": [
+        {
+          "id": "verdict-2",
+          "write_file": {
+            "path": "{env:YGG_REVIEW_DIR}/verdict.json",
+            "text": "{\"review\": \"rv-0002\", \"verdict\": \"approve\"}"
+          }
+        }
+      ]
+    },
+    {
+      "mode": "script",
+      "steps": [
+        {
+          "id": "verdict-3",
+          "write_file": {
+            "path": "{env:YGG_REVIEW_DIR}/verdict.json",
+            "text": "{\"review\": \"rv-0003\", \"verdict\": \"approve\"}"
+          }
+        }
+      ]
+    }
+  ]
+}

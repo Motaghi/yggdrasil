@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yggdrasil"
+version = "1.0.0"
+description = "A conductor for teams of AI coding agents, with approval gates and a tracker, inspired by PRINCE2"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+dependencies = ["PyYAML>=6"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python :: 3",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+]
+
+[project.urls]
+Homepage = "https://github.com/Motaghi/yggdrasil"
+Source = "https://github.com/Motaghi/yggdrasil"
+Issues = "https://github.com/Motaghi/yggdrasil/issues"
+
+[project.optional-dependencies]
+test = ["pytest>=8", "jsonschema>=4", "graphql-core>=3.2"]
+
+[project.scripts]
+ygg = "yggdrasil.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+yggdrasil = ["data/*.yaml", "data/*.json", "data/presets/*.yaml", "data/roles/*.md"]
+
+[project.entry-points."yggdrasil.trackers"]
+files = "yggdrasil.plugins:Builtin"
+linear = "yggdrasil.plugins:Builtin"
+
+[project.entry-points."yggdrasil.launchers"]
+headless = "yggdrasil.plugins:Builtin"
+t3 = "yggdrasil.plugins:Builtin"
+
+[project.entry-points."yggdrasil.alert_forwarders"]
+jsonl = "yggdrasil.plugins:Builtin"

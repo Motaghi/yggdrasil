@@ -1,0 +1,245 @@
+[
+  {
+    "name": "cli-version",
+    "argv": [
+      "t3",
+      "--version"
+    ],
+    "exit": 0,
+    "stdout": "t3 v0.1.5\n",
+    "stderr": ""
+  },
+  {
+    "name": "server-version",
+    "argv": [
+      "t3",
+      "service",
+      "status"
+    ],
+    "exit": 0,
+    "stdout": "T3 Code service\n  Status: installed \u00b7 t3@0.1.9 (newer than this t3@0.1.5 CLI)\n",
+    "stderr": ""
+  },
+  {
+    "name": "thread-start-worktree-wait",
+    "argv": [
+      "t3",
+      "thread",
+      "start",
+      "--json",
+      "--title",
+      "ygg-m1-probe-1",
+      "--provider",
+      "pool-bg-a",
+      "--model",
+      "claude-sonnet-5-5",
+      "--worktree",
+      "main",
+      "--branch",
+      "ygg/m1/lane/probe",
+      "--wait",
+      "/tmp/ygg-m1/t3proj",
+      "Reply with the single word OK and nothing else. Do not use any tools."
+    ],
+    "exit": 0,
+    "stdout": {
+      "threadId": "mcp:00000000-0000-4000-9000-000000000001",
+      "runId": "run:thread:mcp%3A00000000-0000-4000-9000-000000000001:ordinal:1",
+      "status": "completed",
+      "reply": "OK",
+      "error": null
+    },
+    "stderr": ""
+  },
+  {
+    "name": "thread-show",
+    "argv": [
+      "t3",
+      "thread",
+      "show",
+      "--json",
+      "--messages",
+      "5",
+      "mcp:00000000-0000-4000-9000-000000000001"
+    ],
+    "exit": 0,
+    "stdout": {
+      "thread": {
+        "threadId": "mcp:00000000-0000-4000-9000-000000000001",
+        "projectId": "00000000-0000-4000-9000-000000000002",
+        "title": "ygg-m1-probe-1",
+        "link": "https://app.t3.codes/threads/00000000-0000-4000-9000-000000000003/mcp%3A00000000-0000-4000-9000-000000000001",
+        "createdBy": "agent",
+        "creationSource": "mcp",
+        "status": "completed",
+        "latestRunId": "run:thread:mcp%3A00000000-0000-4000-9000-000000000001:ordinal:1",
+        "activeRunId": null,
+        "providerInstanceId": "pool-bg-a",
+        "model": "claude-sonnet-5-5",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "linkedPullRequest": null,
+        "pullRequests": [],
+        "titleRegeneration": null,
+        "branch": "ygg/m1/lane/probe",
+        "worktreePath": "/t3-worktrees/t3proj/ygg-m1-lane-probe-58abdb99f1badb3f",
+        "parentThreadId": null,
+        "relationshipToParent": null,
+        "runCount": 1,
+        "itemCount": 4,
+        "pendingRequestCount": 0,
+        "archived": false,
+        "settled": false,
+        "settledAt": null,
+        "snoozed": false,
+        "snoozedUntil": null,
+        "createdAt": "2026-11-15T21:37:49.756Z",
+        "updatedAt": "2026-11-15T21:38:12.859Z"
+      },
+      "messages": [
+        {
+          "role": "user",
+          "runId": "run:thread:mcp%3A00000000-0000-4000-9000-000000000001:ordinal:1",
+          "text": "Reply with the single word OK and nothing else. Do not use any tools."
+        },
+        {
+          "role": "assistant",
+          "runId": "run:thread:mcp%3A00000000-0000-4000-9000-000000000001:ordinal:1",
+          "text": "OK"
+        }
+      ]
+    },
+    "stderr": ""
+  },
+  {
+    "name": "thread-send",
+    "argv": [
+      "t3",
+      "thread",
+      "send",
+      "--json",
+      "mcp:00000000-0000-4000-9000-000000000001",
+      "Reply with the single word TWO and nothing else."
+    ],
+    "exit": 0,
+    "stdout": {
+      "threadId": "mcp:00000000-0000-4000-9000-000000000001",
+      "link": "https://app.t3.codes/threads/00000000-0000-4000-9000-000000000003/mcp%3A00000000-0000-4000-9000-000000000001",
+      "messageId": "message:mcp:client%3A00000000-0000-4000-9000-000000000004:thread-send:00000000-0000-4000-9000-000000000005",
+      "runId": "run:thread:mcp%3A00000000-0000-4000-9000-000000000001:ordinal:2",
+      "status": "starting",
+      "delivery": "started"
+    },
+    "stderr": ""
+  },
+  {
+    "name": "thread-show-after-send",
+    "argv": [
+      "t3",
+      "thread",
+      "show",
+      "--json",
+      "--messages",
+      "10",
+      "mcp:00000000-0000-4000-9000-000000000001"
+    ],
+    "exit": 0,
+    "stdout": {
+      "thread": {
+        "threadId": "mcp:00000000-0000-4000-9000-000000000001",
+        "projectId": "00000000-0000-4000-9000-000000000002",
+        "title": "ygg-m1-probe-1",
+        "link": "https://app.t3.codes/threads/00000000-0000-4000-9000-000000000003/mcp%3A00000000-0000-4000-9000-000000000001",
+        "createdBy": "agent",
+        "creationSource": "mcp",
+        "status": "completed",
+        "latestRunId": "run:thread:mcp%3A00000000-0000-4000-9000-000000000001:ordinal:2",
+        "activeRunId": null,
+        "providerInstanceId": "pool-bg-a",
+        "model": "claude-sonnet-5-5",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "linkedPullRequest": null,
+        "pullRequests": [],
+        "titleRegeneration": null,
+        "branch": "ygg/m1/lane/probe",
+        "worktreePath": "/t3-worktrees/t3proj/ygg-m1-lane-probe-58abdb99f1badb3f",
+        "parentThreadId": null,
+        "relationshipToParent": null,
+        "runCount": 2,
+        "itemCount": 7,
+        "pendingRequestCount": 0,
+        "archived": false,
+        "settled": false,
+        "settledAt": null,
+        "snoozed": false,
+        "snoozedUntil": null,
+        "createdAt": "2026-11-15T21:37:49.756Z",
+        "updatedAt": "2026-11-15T21:38:52.643Z"
+      },
+      "messages": [
+        {
+          "role": "user",
+          "runId": "run:thread:mcp%3A00000000-0000-4000-9000-000000000001:ordinal:1",
+          "text": "Reply with the single word OK and nothing else. Do not use any tools."
+        },
+        {
+          "role": "assistant",
+          "runId": "run:thread:mcp%3A00000000-0000-4000-9000-000000000001:ordinal:1",
+          "text": "OK"
+        },
+        {
+          "role": "user",
+          "runId": "run:thread:mcp%3A00000000-0000-4000-9000-000000000001:ordinal:2",
+          "text": "Reply with the single word TWO and nothing else."
+        },
+        {
+          "role": "assistant",
+          "runId": "run:thread:mcp%3A00000000-0000-4000-9000-000000000001:ordinal:2",
+          "text": "TWO"
+        }
+      ]
+    },
+    "stderr": ""
+  },
+  {
+    "name": "thread-show-missing",
+    "argv": [
+      "t3",
+      "thread",
+      "show",
+      "--json",
+      "no-such-thread"
+    ],
+    "exit": 1,
+    "stdout": "",
+    "stderr": "Thread no-such-thread is no longer available.\n"
+  },
+  {
+    "name": "thread-list-json-cli-0.1.5-mismatch",
+    "argv": [
+      "t3",
+      "thread",
+      "list",
+      "--project",
+      "/tmp/ygg-m1/t3proj",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": "[22:37:37.795] WARN (#20): Database migration history diverges from this build; recorded migration ids are skipped, not reconciled by name. {\n  divergent: [\n    '73:ActiveTurnItemIndexes (unknown to this build)',\n    '74:ExcludeAttachmentPlaceholdersFromSearch (unknown to this build)',\n    '75:SubagentDeliveryState (unknown to this build)',\n    '76:ProjectionProjectsPinArchive (unknown to this build)',\n    '77:RepairBooleanSettledOverride (unknown to this build)',\n    '78:DropOrchestrationEventCorrelationIndex (unknown to this build)',\n    '79:DelegatedRecoveryIndexes (unknown to this build)',\n    '80:ScheduledTaskThreadMode (unknown to this build)',\n    '81:ProjectionMessageSearchText (unknown to this build)'\n  ]\n}\n[]\n",
+    "stderr": ""
+  },
+  {
+    "name": "project-remove-force",
+    "argv": [
+      "t3",
+      "project",
+      "remove",
+      "--force",
+      "00000000-0000-4000-9000-000000000002"
+    ],
+    "exit": 0,
+    "stdout": "Removed project 00000000-0000-4000-9000-000000000002 (ygg-m1-probe).\n",
+    "stderr": ""
+  }
+]

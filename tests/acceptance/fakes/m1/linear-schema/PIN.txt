@@ -1,0 +1,6 @@
+source: https://github.com/linear/linear/blob/87d638c0b151575505d36822839324d2287f2e06/packages/sdk/src/schema.graphql
+commit: 87d638c0b151575505d36822839324d2287f2e06
+commit_date: 2026-11-11T19:41:49Z
+sha256: 20cadd5061b0c95acbd0ecdb2b387023b1beb3be84c10c74d22b560f61cd8730
+fetched: 2026-11-15T22:08:49Z
+license: MIT, Copyright (c) 2019 Linear; full text in LICENSE beside this file (from the same commit)

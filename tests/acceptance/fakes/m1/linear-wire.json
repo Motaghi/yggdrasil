@@ -1,0 +1,1460 @@
+{
+  "linear": {
+    "01-viewer.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "query Viewer { viewer { id name displayName email } organization { id name urlKey } }"
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999997",
+            "x-ratelimit-complexity-reset": "1794782518577",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9999",
+            "x-ratelimit-requests-reset": "1794782518577"
+          },
+          "body": {
+            "data": {
+              "viewer": {
+                "id": "00000000-0000-4000-8000-000000000001",
+                "name": "Yggdrasil",
+                "displayName": "yggdrasil",
+                "email": "app@example.invalid"
+              },
+              "organization": {
+                "id": "00000000-0000-4000-8000-000000000002",
+                "name": "example-org",
+                "urlKey": "example-org"
+              }
+            }
+          }
+        }
+      }
+    ],
+    "02-team-by-key.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "query Team($key: String!) { teams(filter: {key: {eq: $key}}) { nodes { id key name private } } }",
+            "variables": {
+              "key": "YGG"
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999927",
+            "x-ratelimit-complexity-reset": "1794782518746",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9998",
+            "x-ratelimit-requests-reset": "1794782518746"
+          },
+          "body": {
+            "data": {
+              "teams": {
+                "nodes": [
+                  {
+                    "id": "00000000-0000-4000-8000-000000000003",
+                    "key": "YGG",
+                    "name": "Yggdrasil",
+                    "private": true
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    ],
+    "03-labels-list.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "query Labels($team: ID!) { issueLabels(filter: {team: {id: {eq: $team}}}, first: 50) { nodes { id name } pageInfo { hasNextPage endCursor } } }",
+            "variables": {
+              "team": "00000000-0000-4000-8000-000000000003"
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999807",
+            "x-ratelimit-complexity-reset": "1794782518922",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9997",
+            "x-ratelimit-requests-reset": "1794782518922"
+          },
+          "body": {
+            "data": {
+              "issueLabels": {
+                "nodes": [],
+                "pageInfo": {
+                  "hasNextPage": false,
+                  "endCursor": null
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "04-label-create-0.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "mutation Label($input: IssueLabelCreateInput!) { issueLabelCreate(input: $input) { success issueLabel { id name } } }",
+            "variables": {
+              "input": {
+                "name": "std:v1",
+                "teamId": "00000000-0000-4000-8000-000000000003"
+              }
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999997",
+            "x-ratelimit-complexity-reset": "1794782519091",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9998",
+            "x-ratelimit-requests-reset": "1794782519091"
+          },
+          "body": {
+            "data": {
+              "issueLabelCreate": {
+                "success": true,
+                "issueLabel": {
+                  "id": "00000000-0000-4000-8000-000000000004",
+                  "name": "std:v1"
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "04-label-create-1.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "mutation Label($input: IssueLabelCreateInput!) { issueLabelCreate(input: $input) { success issueLabel { id name } } }",
+            "variables": {
+              "input": {
+                "name": "lane:pm1tl1",
+                "teamId": "00000000-0000-4000-8000-000000000003"
+              }
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999994",
+            "x-ratelimit-complexity-reset": "1794782519329",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9997",
+            "x-ratelimit-requests-reset": "1794782519329"
+          },
+          "body": {
+            "data": {
+              "issueLabelCreate": {
+                "success": true,
+                "issueLabel": {
+                  "id": "00000000-0000-4000-8000-000000000005",
+                  "name": "lane:pm1tl1"
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "04-label-create-2.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "mutation Label($input: IssueLabelCreateInput!) { issueLabelCreate(input: $input) { success issueLabel { id name } } }",
+            "variables": {
+              "input": {
+                "name": "exception",
+                "teamId": "00000000-0000-4000-8000-000000000003"
+              }
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999991",
+            "x-ratelimit-complexity-reset": "1794782519677",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9996",
+            "x-ratelimit-requests-reset": "1794782519677"
+          },
+          "body": {
+            "data": {
+              "issueLabelCreate": {
+                "success": true,
+                "issueLabel": {
+                  "id": "00000000-0000-4000-8000-000000000006",
+                  "name": "exception"
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "05-project-find.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "query P($name: String!) { projects(filter: {name: {eq: $name}}) { nodes { id name } } }",
+            "variables": {
+              "name": "ygg-m1-fixtures"
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999940",
+            "x-ratelimit-complexity-reset": "1794782520060",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9998",
+            "x-ratelimit-requests-reset": "1794782520060"
+          },
+          "body": {
+            "data": {
+              "projects": {
+                "nodes": []
+              }
+            }
+          }
+        }
+      }
+    ],
+    "06-project-create.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "mutation P($input: ProjectCreateInput!) { projectCreate(input: $input) { success project { id name url } } }",
+            "variables": {
+              "input": {
+                "name": "ygg-m1-fixtures",
+                "teamIds": [
+                  "00000000-0000-4000-8000-000000000003"
+                ],
+                "description": "Yggdrasil M1 probe fixtures"
+              }
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999937",
+            "x-ratelimit-complexity-reset": "1794782520290",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9997",
+            "x-ratelimit-requests-reset": "1794782520290"
+          },
+          "body": {
+            "data": {
+              "projectCreate": {
+                "success": true,
+                "project": {
+                  "id": "00000000-0000-4000-8000-000000000007",
+                  "name": "ygg-m1-fixtures",
+                  "url": "https://linear.app/example-org/project/ygg-m1-fixtures-2058cf7ca053"
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "07-milestone-create.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "mutation M($input: ProjectMilestoneCreateInput!) { projectMilestoneCreate(input: $input) { success projectMilestone { id name } } }",
+            "variables": {
+              "input": {
+                "projectId": "00000000-0000-4000-8000-000000000007",
+                "name": "Stage 2"
+              }
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999934",
+            "x-ratelimit-complexity-reset": "1794782520856",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9996",
+            "x-ratelimit-requests-reset": "1794782520856"
+          },
+          "body": {
+            "data": {
+              "projectMilestoneCreate": {
+                "success": true,
+                "projectMilestone": {
+                  "id": "00000000-0000-4000-8000-000000000008",
+                  "name": "Stage 2"
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "08-issue-create.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "mutation I($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier title url labels { nodes { name } } projectMilestone { name } } } }",
+            "variables": {
+              "input": {
+                "teamId": "00000000-0000-4000-8000-000000000003",
+                "projectId": "00000000-0000-4000-8000-000000000007",
+                "projectMilestoneId": "00000000-0000-4000-8000-000000000008",
+                "title": "WP-41 Save module split",
+                "description": "Save module split",
+                "labelIds": [
+                  "00000000-0000-4000-8000-000000000004"
+                ]
+              }
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999994",
+            "x-ratelimit-complexity-reset": "1794782521144",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9998",
+            "x-ratelimit-requests-reset": "1794782521144"
+          },
+          "body": {
+            "data": {
+              "issueCreate": {
+                "success": true,
+                "issue": {
+                  "id": "00000000-0000-4000-8000-000000000009",
+                  "identifier": "YGG-1",
+                  "title": "WP-41 Save module split",
+                  "url": "https://linear.app/example-org/issue/YGG-1",
+                  "labels": {
+                    "nodes": [
+                      {
+                        "name": "std:v1"
+                      }
+                    ]
+                  },
+                  "projectMilestone": {
+                    "name": "Stage 2"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "09-issue-update-label.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "mutation U($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { success issue { id labels { nodes { name } } } } }",
+            "variables": {
+              "id": "00000000-0000-4000-8000-000000000009",
+              "input": {
+                "labelIds": [
+                  "00000000-0000-4000-8000-000000000004",
+                  "00000000-0000-4000-8000-000000000005"
+                ]
+              }
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999989",
+            "x-ratelimit-complexity-reset": "1794782521498",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9997",
+            "x-ratelimit-requests-reset": "1794782521498"
+          },
+          "body": {
+            "data": {
+              "issueUpdate": {
+                "success": true,
+                "issue": {
+                  "id": "00000000-0000-4000-8000-000000000009",
+                  "labels": {
+                    "nodes": [
+                      {
+                        "name": "std:v1"
+                      },
+                      {
+                        "name": "lane:pm1tl1"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "10-subissue-create.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "mutation I($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id title parent { id } } } }",
+            "variables": {
+              "input": {
+                "teamId": "00000000-0000-4000-8000-000000000003",
+                "projectId": "00000000-0000-4000-8000-000000000007",
+                "parentId": "00000000-0000-4000-8000-000000000009",
+                "title": "split save module"
+              }
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999986",
+            "x-ratelimit-complexity-reset": "1794782521819",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9996",
+            "x-ratelimit-requests-reset": "1794782521819"
+          },
+          "body": {
+            "data": {
+              "issueCreate": {
+                "success": true,
+                "issue": {
+                  "id": "00000000-0000-4000-8000-000000000010",
+                  "title": "split save module",
+                  "parent": {
+                    "id": "00000000-0000-4000-8000-000000000009"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "11-comment-create.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "mutation C($input: CommentCreateInput!) { commentCreate(input: $input) { success comment { id body } } }",
+            "variables": {
+              "input": {
+                "issueId": "00000000-0000-4000-8000-000000000009",
+                "body": "kind: checkpoint\n\nWP-41 60 percent done"
+              }
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999997",
+            "x-ratelimit-complexity-reset": "1794782522160",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9998",
+            "x-ratelimit-requests-reset": "1794782522160"
+          },
+          "body": {
+            "data": {
+              "commentCreate": {
+                "success": true,
+                "comment": {
+                  "id": "00000000-0000-4000-8000-000000000011",
+                  "body": "kind: checkpoint\n\nWP-41 60 percent done"
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "12-exception-issue.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "mutation I($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id labels { nodes { name } } } } }",
+            "variables": {
+              "input": {
+                "teamId": "00000000-0000-4000-8000-000000000003",
+                "projectId": "00000000-0000-4000-8000-000000000007",
+                "title": "E-0001 save format change",
+                "description": "Plan: add one day to stage 2",
+                "labelIds": [
+                  "00000000-0000-4000-8000-000000000006"
+                ]
+              }
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999992",
+            "x-ratelimit-complexity-reset": "1794782522428",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9997",
+            "x-ratelimit-requests-reset": "1794782522428"
+          },
+          "body": {
+            "data": {
+              "issueCreate": {
+                "success": true,
+                "issue": {
+                  "id": "00000000-0000-4000-8000-000000000012",
+                  "labels": {
+                    "nodes": [
+                      {
+                        "name": "exception"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "13-project-update-health.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "mutation PU($input: ProjectUpdateCreateInput!) { projectUpdateCreate(input: $input) { success projectUpdate { id health body } } }",
+            "variables": {
+              "input": {
+                "projectId": "00000000-0000-4000-8000-000000000007",
+                "health": "atRisk",
+                "body": "stage 2 slipping 1 day"
+              }
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999988",
+            "x-ratelimit-complexity-reset": "1794782522737",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9996",
+            "x-ratelimit-requests-reset": "1794782522737"
+          },
+          "body": {
+            "data": {
+              "projectUpdateCreate": {
+                "success": true,
+                "projectUpdate": {
+                  "id": "00000000-0000-4000-8000-000000000013",
+                  "health": "atRisk",
+                  "body": "stage 2 slipping 1 day"
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "14-project-document.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "mutation D($input: DocumentCreateInput!) { documentCreate(input: $input) { success document { id title project { id } } } }",
+            "variables": {
+              "input": {
+                "projectId": "00000000-0000-4000-8000-000000000007",
+                "title": "route-map",
+                "content": "## Destination\n## Frontier\n"
+              }
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999985",
+            "x-ratelimit-complexity-reset": "1794782522961",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9995",
+            "x-ratelimit-requests-reset": "1794782522961"
+          },
+          "body": {
+            "data": {
+              "documentCreate": {
+                "success": true,
+                "document": {
+                  "id": "00000000-0000-4000-8000-000000000014",
+                  "title": "route-map",
+                  "project": {
+                    "id": "00000000-0000-4000-8000-000000000007"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "15-initiative-create.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "mutation In($input: InitiativeCreateInput!) { initiativeCreate(input: $input) { success initiative { id name } } }",
+            "variables": {
+              "input": {
+                "name": "[ygg-m1-probe]",
+                "description": "Yggdrasil M1 probe, deleted after the run"
+              }
+            }
+          }
+        },
+        "response": {
+          "status": 400,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8"
+          },
+          "body": {
+            "errors": [
+              {
+                "message": "Invalid scope: `initiative:write` required for app user to write initiative data",
+                "extensions": {
+                  "type": "forbidden",
+                  "code": "FORBIDDEN",
+                  "statusCode": 403,
+                  "userError": true,
+                  "http": {
+                    "status": 400
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "18-issues-page-1.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "query Q($project: ID!, $after: String) { issues(first: 2, after: $after, filter: {project: {id: {eq: $project}}}) { nodes { id title } pageInfo { hasNextPage endCursor } } }",
+            "variables": {
+              "project": "00000000-0000-4000-8000-000000000007",
+              "after": null
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999993",
+            "x-ratelimit-complexity-reset": "1794782523472",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9995",
+            "x-ratelimit-requests-reset": "1794782523472"
+          },
+          "body": {
+            "data": {
+              "issues": {
+                "nodes": [
+                  {
+                    "id": "00000000-0000-4000-8000-000000000012",
+                    "title": "E-0001 save format change"
+                  },
+                  {
+                    "id": "00000000-0000-4000-8000-000000000010",
+                    "title": "split save module"
+                  }
+                ],
+                "pageInfo": {
+                  "hasNextPage": true,
+                  "endCursor": "00000000-0000-4000-8000-000000000010"
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "18-issues-page-2.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "query Q($project: ID!, $after: String) { issues(first: 2, after: $after, filter: {project: {id: {eq: $project}}}) { nodes { id title } pageInfo { hasNextPage endCursor } } }",
+            "variables": {
+              "project": "00000000-0000-4000-8000-000000000007",
+              "after": "00000000-0000-4000-8000-000000000010"
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999989",
+            "x-ratelimit-complexity-reset": "1794782523755",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9994",
+            "x-ratelimit-requests-reset": "1794782523755"
+          },
+          "body": {
+            "data": {
+              "issues": {
+                "nodes": [
+                  {
+                    "id": "00000000-0000-4000-8000-000000000009",
+                    "title": "WP-41 Save module split"
+                  }
+                ],
+                "pageInfo": {
+                  "hasNextPage": false,
+                  "endCursor": "00000000-0000-4000-8000-000000000009"
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "19-unauthorised.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "query Viewer { viewer { id } }"
+          }
+        },
+        "response": {
+          "status": 401,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8"
+          },
+          "body": {
+            "errors": [
+              {
+                "message": "Authentication required, not authenticated",
+                "extensions": {
+                  "type": "authentication error",
+                  "code": "AUTHENTICATION_ERROR",
+                  "statusCode": 401,
+                  "userError": true,
+                  "userPresentableMessage": "You need to authenticate to access this operation.",
+                  "meta": {},
+                  "http": {
+                    "status": 401
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "linear-initiatives": {
+    "01-viewer.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "query Viewer { viewer { id name displayName email } organization { id name urlKey } }"
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999997",
+            "x-ratelimit-complexity-reset": "1794782849407",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9999",
+            "x-ratelimit-requests-reset": "1794782849407"
+          },
+          "body": {
+            "data": {
+              "viewer": {
+                "id": "00000000-0000-4000-a000-000000000001",
+                "name": "Yggdrasil",
+                "displayName": "yggdrasil",
+                "email": "app@example.invalid"
+              },
+              "organization": {
+                "id": "00000000-0000-4000-a000-000000000002",
+                "name": "example-org",
+                "urlKey": "example-org"
+              }
+            }
+          }
+        }
+      }
+    ],
+    "02-initiatives-before.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "query { initiatives(first: 10) { nodes { id name } pageInfo { hasNextPage endCursor } } }"
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999973",
+            "x-ratelimit-complexity-reset": "1794782849585",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9998",
+            "x-ratelimit-requests-reset": "1794782849585"
+          },
+          "body": {
+            "data": {
+              "initiatives": {
+                "nodes": [
+                  {
+                    "id": "00000000-0000-4000-a000-000000000003",
+                    "name": "other-initiative-3"
+                  },
+                  {
+                    "id": "00000000-0000-4000-a000-000000000004",
+                    "name": "other-initiative-2"
+                  },
+                  {
+                    "id": "00000000-0000-4000-a000-000000000005",
+                    "name": "other-initiative-1"
+                  }
+                ],
+                "pageInfo": {
+                  "hasNextPage": false,
+                  "endCursor": "00000000-0000-4000-a000-000000000005"
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "03-project-find.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "query P($name: String!) { projects(filter: {name: {eq: $name}}) { nodes { id name } } }",
+            "variables": {
+              "name": "ygg-m1-fixtures"
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999913",
+            "x-ratelimit-complexity-reset": "1794782849743",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9997",
+            "x-ratelimit-requests-reset": "1794782849743"
+          },
+          "body": {
+            "data": {
+              "projects": {
+                "nodes": [
+                  {
+                    "id": "00000000-0000-4000-a000-000000000006",
+                    "name": "ygg-m1-fixtures"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    ],
+    "04-initiative-create.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "mutation In($input: InitiativeCreateInput!) { initiativeCreate(input: $input) { success initiative { id name description status } } }",
+            "variables": {
+              "input": {
+                "name": "[ygg-m1-probe]",
+                "description": "Yggdrasil M1 probe, deleted after the run"
+              }
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999909",
+            "x-ratelimit-complexity-reset": "1794782849907",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9996",
+            "x-ratelimit-requests-reset": "1794782849907"
+          },
+          "body": {
+            "data": {
+              "initiativeCreate": {
+                "success": true,
+                "initiative": {
+                  "id": "00000000-0000-4000-a000-000000000007",
+                  "name": "[ygg-m1-probe]",
+                  "description": "Yggdrasil M1 probe, deleted after the run",
+                  "status": "Active"
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "05-initiative-link-project.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "mutation L($input: InitiativeToProjectCreateInput!) { initiativeToProjectCreate(input: $input) { success initiativeToProject { id } } }",
+            "variables": {
+              "input": {
+                "initiativeId": "00000000-0000-4000-a000-000000000007",
+                "projectId": "00000000-0000-4000-a000-000000000006"
+              }
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999998",
+            "x-ratelimit-complexity-reset": "1794782850111",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9997",
+            "x-ratelimit-requests-reset": "1794782850111"
+          },
+          "body": {
+            "data": {
+              "initiativeToProjectCreate": {
+                "success": true,
+                "initiativeToProject": {
+                  "id": "00000000-0000-4000-a000-000000000008"
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "06-initiative-document-journal.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "mutation D($input: DocumentCreateInput!) { documentCreate(input: $input) { success document { id title initiative { id name } } } }",
+            "variables": {
+              "input": {
+                "initiativeId": "00000000-0000-4000-a000-000000000007",
+                "title": "journal",
+                "content": "---\nschema: ygg.journal.v1\n---\n"
+              }
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999994",
+            "x-ratelimit-complexity-reset": "1794782850335",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9996",
+            "x-ratelimit-requests-reset": "1794782850335"
+          },
+          "body": {
+            "data": {
+              "documentCreate": {
+                "success": true,
+                "document": {
+                  "id": "00000000-0000-4000-a000-000000000009",
+                  "title": "journal",
+                  "initiative": {
+                    "id": "00000000-0000-4000-a000-000000000007",
+                    "name": "[ygg-m1-probe]"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "07-initiative-document-northstar.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "mutation D($input: DocumentCreateInput!) { documentCreate(input: $input) { success document { id title initiative { id name } } } }",
+            "variables": {
+              "input": {
+                "initiativeId": "00000000-0000-4000-a000-000000000007",
+                "title": "northstar",
+                "content": "---\nschema: ygg.northstar.v1\nscope: programme\n---\n## Refusals\n- No paid shortcuts\n"
+              }
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999990",
+            "x-ratelimit-complexity-reset": "1794782850591",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9995",
+            "x-ratelimit-requests-reset": "1794782850591"
+          },
+          "body": {
+            "data": {
+              "documentCreate": {
+                "success": true,
+                "document": {
+                  "id": "00000000-0000-4000-a000-000000000010",
+                  "title": "northstar",
+                  "initiative": {
+                    "id": "00000000-0000-4000-a000-000000000007",
+                    "name": "[ygg-m1-probe]"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "08-initiative-update.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "mutation U($id: String!, $input: InitiativeUpdateInput!) { initiativeUpdate(id: $id, input: $input) { success initiative { id name description } } }",
+            "variables": {
+              "id": "00000000-0000-4000-a000-000000000007",
+              "input": {
+                "description": "Yggdrasil M1 probe, updated"
+              }
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999987",
+            "x-ratelimit-complexity-reset": "1794782850876",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9994",
+            "x-ratelimit-requests-reset": "1794782850876"
+          },
+          "body": {
+            "data": {
+              "initiativeUpdate": {
+                "success": true,
+                "initiative": {
+                  "id": "00000000-0000-4000-a000-000000000007",
+                  "name": "[ygg-m1-probe]",
+                  "description": "Yggdrasil M1 probe, updated"
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "09-initiative-read.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "query R($id: String!) { initiative(id: $id) { id name description projects(first: 10) { nodes { id name } pageInfo { hasNextPage endCursor } } documents(first: 1) { nodes { id title } pageInfo { hasNextPage endCursor } } } }",
+            "variables": {
+              "id": "00000000-0000-4000-a000-000000000007"
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999972",
+            "x-ratelimit-complexity-reset": "1794782851061",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9996",
+            "x-ratelimit-requests-reset": "1794782851061"
+          },
+          "body": {
+            "data": {
+              "initiative": {
+                "id": "00000000-0000-4000-a000-000000000007",
+                "name": "[ygg-m1-probe]",
+                "description": "Yggdrasil M1 probe, updated",
+                "projects": {
+                  "nodes": [
+                    {
+                      "id": "00000000-0000-4000-a000-000000000006",
+                      "name": "ygg-m1-fixtures"
+                    }
+                  ],
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": "00000000-0000-4000-a000-000000000006"
+                  }
+                },
+                "documents": {
+                  "nodes": [
+                    {
+                      "id": "00000000-0000-4000-a000-000000000010",
+                      "title": "northstar"
+                    }
+                  ],
+                  "pageInfo": {
+                    "hasNextPage": true,
+                    "endCursor": "00000000-0000-4000-a000-000000000010"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "10-initiative-documents-page-1.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "query R($id: String!, $after: String) { initiative(id: $id) { documents(first: 1, after: $after) { nodes { id title content } pageInfo { hasNextPage endCursor } } } }",
+            "variables": {
+              "id": "00000000-0000-4000-a000-000000000007",
+              "after": null
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999968",
+            "x-ratelimit-complexity-reset": "1794782851214",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9995",
+            "x-ratelimit-requests-reset": "1794782851214"
+          },
+          "body": {
+            "data": {
+              "initiative": {
+                "documents": {
+                  "nodes": [
+                    {
+                      "id": "00000000-0000-4000-a000-000000000010",
+                      "title": "northstar",
+                      "content": "```yaml\nschema: ygg.northstar.v1\nscope: programme\n```\n\n## Refusals\n\n* No paid shortcuts"
+                    }
+                  ],
+                  "pageInfo": {
+                    "hasNextPage": true,
+                    "endCursor": "00000000-0000-4000-a000-000000000010"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "11-initiative-documents-page-2.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "query R($id: String!, $after: String) { initiative(id: $id) { documents(first: 1, after: $after) { nodes { id title content } pageInfo { hasNextPage endCursor } } } }",
+            "variables": {
+              "id": "00000000-0000-4000-a000-000000000007",
+              "after": "00000000-0000-4000-a000-000000000010"
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999964",
+            "x-ratelimit-complexity-reset": "1794782851392",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9994",
+            "x-ratelimit-requests-reset": "1794782851392"
+          },
+          "body": {
+            "data": {
+              "initiative": {
+                "documents": {
+                  "nodes": [
+                    {
+                      "id": "00000000-0000-4000-a000-000000000009",
+                      "title": "journal",
+                      "content": "```yaml\nschema: ygg.journal.v1\n```"
+                    }
+                  ],
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": "00000000-0000-4000-a000-000000000009"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "12-initiatives-list.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "query { initiatives(first: 1) { nodes { id name } pageInfo { hasNextPage endCursor } } }"
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999961",
+            "x-ratelimit-complexity-reset": "1794782851557",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9993",
+            "x-ratelimit-requests-reset": "1794782851557"
+          },
+          "body": {
+            "data": {
+              "initiatives": {
+                "nodes": [
+                  {
+                    "id": "00000000-0000-4000-a000-000000000007",
+                    "name": "[ygg-m1-probe]"
+                  }
+                ],
+                "pageInfo": {
+                  "hasNextPage": true,
+                  "endCursor": "00000000-0000-4000-a000-000000000007"
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "13-initiative-delete.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "mutation X($id: String!) { initiativeDelete(id: $id) { success } }",
+            "variables": {
+              "id": "00000000-0000-4000-a000-000000000007"
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999996",
+            "x-ratelimit-complexity-reset": "1794782852407",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9992",
+            "x-ratelimit-requests-reset": "1794782852407"
+          },
+          "body": {
+            "data": {
+              "initiativeDelete": {
+                "success": true
+              }
+            }
+          }
+        }
+      }
+    ],
+    "14-initiative-after-delete.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "query R($id: String!) { initiative(id: $id) { id name trashed archivedAt } }",
+            "variables": {
+              "id": "00000000-0000-4000-a000-000000000007"
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999994",
+            "x-ratelimit-complexity-reset": "1794782852635",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9991",
+            "x-ratelimit-requests-reset": "1794782852635"
+          },
+          "body": {
+            "data": {
+              "initiative": {
+                "id": "00000000-0000-4000-a000-000000000007",
+                "name": "[ygg-m1-probe]",
+                "trashed": true,
+                "archivedAt": "2026-11-15T21:47:32.411Z"
+              }
+            }
+          }
+        }
+      }
+    ],
+    "15-initiatives-after.json": [
+      {
+        "request": {
+          "path": "/graphql",
+          "body": {
+            "query": "query { initiatives(first: 10) { nodes { id name } pageInfo { hasNextPage endCursor } } }"
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "x-ratelimit-complexity-limit": "4000000",
+            "x-ratelimit-complexity-remaining": "3999970",
+            "x-ratelimit-complexity-reset": "1794782852805",
+            "x-ratelimit-requests-limit": "10000",
+            "x-ratelimit-requests-remaining": "9990",
+            "x-ratelimit-requests-reset": "1794782852805"
+          },
+          "body": {
+            "data": {
+              "initiatives": {
+                "nodes": [
+                  {
+                    "id": "00000000-0000-4000-a000-000000000003",
+                    "name": "other-initiative-3"
+                  },
+                  {
+                    "id": "00000000-0000-4000-a000-000000000004",
+                    "name": "other-initiative-2"
+                  },
+                  {
+                    "id": "00000000-0000-4000-a000-000000000005",
+                    "name": "other-initiative-1"
+                  }
+                ],
+                "pageInfo": {
+                  "hasNextPage": false,
+                  "endCursor": "00000000-0000-4000-a000-000000000005"
+                }
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.invalid/schemas/pending.schema.json",
+  "title": "ygg.pending.v1",
+  "type": "object",
+  "required": ["schema", "decisions"],
+  "properties": {
+    "schema": {"const": "ygg.pending.v1"},
+    "decisions": {"type": "array", "items": {"type": "object",
+      "required": ["id", "kind", "programme", "project", "raised_by", "scope", "question", "options",
+        "recommended", "reversible", "undo", "aligns", "action", "raised_at", "provenance"],
+      "properties": {
+        "id": {"type": "string"},
+        "kind": {"enum": ["decision", "relay", "pid", "stage", "exception", "morning-go"]},
+        "programme": {"type": ["string", "null"]}, "project": {"type": ["string", "null"]},
+        "raised_by": {"type": "string"},
+        "scope": {"type": "object", "required": ["type", "id"],
+          "properties": {"type": {"enum": ["lane", "package", "project"]}, "id": {"type": "string"}}},
+        "question": {"type": "string"},
+        "options": {"type": "array", "items": {"type": "object", "required": ["label"],
+          "properties": {"label": {"type": "string"}}}},
+        "recommended": {"type": ["string", "null"]},
+        "reversible": {"type": ["boolean", "null"]},
+        "undo": {"type": ["string", "null"]},
+        "aligns": {"type": ["boolean", "null"]},
+        "action": {"type": ["string", "null"]},
+        "raised_at": {"type": "string", "format": "date-time"},
+        "provenance": {"type": "object", "required": ["type", "origin"],
+          "properties": {"type": {"enum": ["agent", "quoted-untrusted"]}, "origin": {"type": "string"}}},
+        "relay": {"type": ["object", "null"], "required": ["msg_id", "from_domain", "to_domain"],
+          "properties": {"msg_id": {"type": "string"}, "from_domain": {"type": "string"}, "to_domain": {"type": "string"}}}
+      }}}
+  }
+}

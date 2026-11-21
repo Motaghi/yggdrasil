@@ -1,0 +1,4 @@
+#!/bin/sh
+# Leak-scan pre-commit hook: every staged file in full, staged file names, and the commit identity.
+# See scripts/leak-scan for the rules and the denylist settings.
+exec "$(dirname "$0")/../leak-scan" --staged

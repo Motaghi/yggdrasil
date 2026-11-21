@@ -1,0 +1,11 @@
+# Release switches for v1.0.0, as shipped. A switch is "on" only when every acceptance criterion it carries
+# passed; see docs/releases/v1.0.0.md. Values are quoted, because an unquoted on or off is a YAML boolean.
+dashboard: "on"
+dashboard_serve: "off"
+summary: "on"
+doctor: "on"
+confirm_window: "off"
+retry_pm_reset: "on"
+t3_live_send: "off"
+retry_cap: "on"
+stage_close: "on"

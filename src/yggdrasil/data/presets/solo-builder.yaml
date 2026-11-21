@@ -1,0 +1,11 @@
+# Solo-builder preset: an individual building software.
+tracker: files
+launcher: headless
+launcher_cli: claude-code
+delivery_approach_default: agile
+agile_cadence_default: flow
+wip_limit: 3
+review_rounds: 2
+branch_protection: refuse
+vocabulary: plain
+alert_forwarder: auto

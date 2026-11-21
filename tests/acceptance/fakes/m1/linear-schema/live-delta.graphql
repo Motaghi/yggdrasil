@@ -1,0 +1,6 @@
+# Live-API delta over the pinned published schema (Amendment A5.9, PROVISIONAL, 2026-11-15).
+# Each line is backed by a successful (HTTP 200) M1 probe recording against the live Linear API.
+# Evidence: m1/fixtures/linear-initiatives/06-initiative-document-journal.json and 07-initiative-document-northstar.json
+extend input DocumentCreateInput {
+  initiativeId: String
+}

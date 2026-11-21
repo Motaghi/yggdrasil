@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""Build-only: write the shipped release.yaml from an acceptance checkpoint's results.
+
+Usage: scripts/release-switches --results <checkpoint results JSON> --out <release-build path>
+
+Not part of the shipped `ygg` command, so no agent rule can reach it. The results file is JSON mapping every
+criterion of every switched feature to its red rows ([] when green). A criterion missing from the file counts
+as red. A switch is on only when every criterion it carries is green; `dashboard_serve` is on only when
+`dashboard` is on. --out is required and may never name the package's own release.yaml: the development tree keeps every switch
+on there, and a release build writes its shipped copy elsewhere (a published tree carries that shipped copy).
+Standard library only, so the release build can run it with any Python 3.
+"""
+
+import argparse
+import json
+import os
+import sys
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+SOURCE = os.path.realpath(os.path.join(HERE, "..", "src", "yggdrasil", "data", "release.yaml"))
+# Each switch and the criteria that carry it (Release marks; AC-79's switch is retry_pm_reset).
+CRITERIA = {
+    "dashboard": ["AC-08", "AC-45", "AC-46", "AC-47", "AC-48"],
+    "dashboard_serve": ["AC-09", "AC-49", "AC-50"],
+    "summary": ["AC-07", "AC-44"],
+    "doctor": ["AC-24"],
+    "confirm_window": ["AC-22", "AC-77"],
+    "retry_pm_reset": ["AC-79"],
+    "t3_live_send": ["AC-36"],
+    "retry_cap": ["AC-23", "AC-78"],
+    "stage_close": ["AC-14", "AC-62", "AC-63"],
+}
+
+
+def decide(results):
+    green = {criterion for criterion, red in results.items() if isinstance(red, list) and not red}
+    switches = {name: all(c in green for c in criteria) for name, criteria in CRITERIA.items()}
+    switches["dashboard_serve"] = switches["dashboard_serve"] and switches["dashboard"]
+    return switches
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="release-switches")
+    parser.add_argument("--results", required=True)
+    parser.add_argument("--out", required=True)
+    args = parser.parse_args(argv)
+    if os.path.realpath(args.out) == SOURCE:
+        print("release-switches: --out names the package's own release.yaml, which this script never overwrites; "
+              "write to a release-build path", file=sys.stderr)
+        return 1
+    try:
+        with open(args.results) as handle:
+            results = json.load(handle)
+    except (OSError, ValueError) as error:
+        print("release-switches: cannot read " + args.results + ": " + str(error), file=sys.stderr)
+        return 1
+    if not isinstance(results, dict):
+        print("release-switches: the results file must be a JSON object", file=sys.stderr)
+        return 1
+    switches = decide(results)
+    lines = ["# Written by scripts/release-switches from " + os.path.basename(args.results) + "."]
+    lines += [name + ': "' + ("on" if value else "off") + '"' for name, value in switches.items()]
+    directory = os.path.dirname(os.path.abspath(args.out))
+    os.makedirs(directory, exist_ok=True)
+    temporary = args.out + ".tmp"
+    with open(temporary, "w") as handle:
+        handle.write("\n".join(lines) + "\n")
+    os.replace(temporary, args.out)
+    for name, value in switches.items():
+        print(name + ": " + ("on" if value else "off"))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

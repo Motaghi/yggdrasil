@@ -1,0 +1,10 @@
+{
+  "schema": "ygg.initiative.v1",
+  "id": "demo",
+  "domain": "demo",
+  "home": "./demo-home",
+  "kind": "vault-docs",
+  "standard_version": 1,
+  "actor": "user",
+  "created_at": "2026-11-16T09:00:00Z"
+}
