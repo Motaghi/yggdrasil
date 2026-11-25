@@ -709,7 +709,7 @@ def merge_lane(project_id: str, lane: str, repo: str) -> str:
         head = git(repo, "rev-parse", "refs/heads/" + branch).stdout.strip()
         if not head:
             raise util.usage("lane branch " + branch + " does not exist")
-        # AC-85 rows 2 and 3 (A11 lane 4): every package on the lane accepted at the lane head, then the
+        # AC-85 rows 2 and 3 (A11): every package on the lane accepted at the lane head, then the
         # trusted re-check of the lane's commits with Yggdrasil's own git (D5).
         from . import mergecheck
         mergecheck.lane_gate(project_id, lane, repo, head)
@@ -732,7 +732,7 @@ LANE_SYNC_CONFLICT = "lane sync hit a conflict; the lane is unchanged"
 def lane_sync(project_id: str, lane: str) -> str:
     """`ygg lane sync <project> --lane <node>` (AC-66 row 3): merge main into the lane with Yggdrasil's own git
     (no hooks), recorded as a sync, so the re-check skips main's commits. A conflict is aborted and the lane is
-    left unchanged (resolving it is v1.1). The user or the project's PM runs it."""
+    left unchanged (resolving it is planned for v1.2). The user or the project's PM runs it."""
     from . import lanecheck
     from .commands import _project_for
     project = _project_for(project_id)

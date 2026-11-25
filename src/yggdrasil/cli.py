@@ -17,7 +17,10 @@ class Parser(argparse.ArgumentParser):
 
 
 def build() -> Parser:
+    from . import __version__
     parser = Parser(prog="ygg")
+    # Printed during parsing, before any config or state is read (AC-01).
+    parser.add_argument("--version", action="version", version="ygg " + __version__)
     sub = parser.add_subparsers(dest="command", parser_class=Parser)
 
     def group(name):
@@ -50,7 +53,7 @@ def build() -> Parser:
     p.add_argument("--as", dest="settle_as", required=True, choices=["removed", "kept"])
 
     p = sub.add_parser("send")
-    # --from and --kind are optional only for the user's short form (AC-54, lane 2); --urgent is AC-55 (lane 2).
+    # --from and --kind are optional only for the user's short form (AC-54); --urgent is AC-55.
     p.add_argument("--from", dest="sender"); p.add_argument("--to", required=True)
     p.add_argument("--kind")
     body = p.add_mutually_exclusive_group(required=True)
@@ -82,7 +85,7 @@ def build() -> Parser:
 
     stage = group("stage")
     p = stage.add_parser("end")
-    # Without --within-tolerance and --report this is the user's form (AC-14, lane 2).
+    # Without --within-tolerance and --report this is the user's form (AC-14).
     p.add_argument("project"); p.add_argument("--within-tolerance", choices=["yes", "no"])
     p.add_argument("--justified", choices=["yes", "no"]); p.add_argument("--report")
     p = stage.add_parser("approve"); p.add_argument("project")
@@ -96,7 +99,7 @@ def build() -> Parser:
     p = wp.add_parser("work-ahead")
     p.add_argument("project"); p.add_argument("--package", required=True)
     p.add_argument("--as", dest="as_node", required=True); p.add_argument("--reason"); p.add_argument("--evidence")
-    p = wp.add_parser("ready")  # A11 lane 2 (AC-12, AC-13, AC-93)
+    p = wp.add_parser("ready")  # A11 (AC-12, AC-13, AC-93)
     p.add_argument("--from", dest="sender", required=True); p.add_argument("--package", required=True)
     p = wp.add_parser("reopen"); p.add_argument("project"); p.add_argument("--package", required=True)  # AC-65
     p = wp.add_parser("cancel"); p.add_argument("project")  # A11 AC-58, A11.1 AC-06, AC-11, AC-13, AC-14
@@ -110,9 +113,9 @@ def build() -> Parser:
     p = review.add_parser("record")
     p.add_argument("--from", dest="sender", required=True); p.add_argument("--package", required=True)
     p.add_argument("--round", required=True, type=int); p.add_argument("--verdict", required=True)
-    for name in ("retry", "drop"):  # A11 lane 2, user-only (AC-57)
+    for name in ("retry", "drop"):  # A11, user-only (AC-57)
         p = review.add_parser(name); p.add_argument("review_id")
-    ruling = group("ruling")  # A11 lane 2 (AC-29, AC-89, AC-90)
+    ruling = group("ruling")  # A11 (AC-29, AC-89, AC-90)
     p = ruling.add_parser("record"); p.add_argument("--project", required=True); p.add_argument("--text", required=True)
 
     acceptance = group("acceptance")
@@ -165,7 +168,7 @@ def build() -> Parser:
     p = test.add_parser("cancel"); p.add_argument("project"); p.add_argument("package")  # driver.seed_cancel
     p = test.add_parser("seed-inbox"); p.add_argument("node"); p.add_argument("--acked", type=int, required=True)  # AC-53
     test.add_parser("faults")
-    p = test.add_parser("alert"); p.add_argument("kind")  # A11 amendment 25 (driver.raise_alert)
+    p = test.add_parser("alert"); p.add_argument("kind")  # test-mode alert verb (driver.raise_alert)
     p.add_argument("fields", nargs=argparse.REMAINDER)
     p = test.add_parser("acceptance"); p.add_argument("project"); p.add_argument("package")  # driver.seed_acceptance
     p.add_argument("sha")
@@ -234,13 +237,13 @@ def build() -> Parser:
     p = sub.add_parser("push-guard"); p.add_argument("repo"); p.add_argument("remote"); p.add_argument("url", nargs="?")
     merge = group("merge")
     p = merge.add_parser("lane"); p.add_argument("project"); p.add_argument("--lane", required=True); p.add_argument("--repo", required=True)
-    # --repo optional and --print: A11 lane 4 (AC-27, AC-85, amendments 14 and 29).
+    # --repo optional and --print: A11 (AC-27, AC-85).
     p = merge.add_parser("main"); p.add_argument("project"); p.add_argument("--repo")
     p.add_argument("--print", dest="print_only", action="store_true")
-    p = merge.add_parser("check"); p.add_argument("project"); p.add_argument("--repo")  # A11 lane 4 (AC-27)
-    lane = group("lane")  # A11 lane 1 (AC-66)
+    p = merge.add_parser("check"); p.add_argument("project"); p.add_argument("--repo")  # A11 (AC-27)
+    lane = group("lane")  # A11 (AC-66)
     p = lane.add_parser("sync"); p.add_argument("project"); p.add_argument("--lane", required=True)
-    p = sub.add_parser("lane-check"); p.add_argument("hook_args", nargs=argparse.REMAINDER)  # A11 lane 1 (AC-16)
+    p = sub.add_parser("lane-check"); p.add_argument("hook_args", nargs=argparse.REMAINDER)  # A11 (AC-16)
 
     p = sub.add_parser("resolve-model"); p.add_argument("node"); p.add_argument("--package")
 
@@ -255,14 +258,17 @@ def build() -> Parser:
     p = plugins.add_parser("list"); p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("profile"); p.add_argument("action", choices=["show"])
-    # A11 verbs behind release switches (lane 4). `ygg dashboard <programme>` and `ygg dashboard serve <programme>`.
+    # A11 verbs behind release switches. `ygg dashboard <programme>` and `ygg dashboard serve <programme>`.
     p = sub.add_parser("dashboard"); p.add_argument("words", nargs="+"); p.add_argument("--no-open", action="store_true")
     p.add_argument("--port", type=int)
     p = sub.add_parser("summary"); p.add_argument("--since")
     p = sub.add_parser("doctor"); p.add_argument("--json", action="store_true")  # A11 AC-24
-    p = sub.add_parser("alerts"); p.add_argument("--for-user", action="store_true")  # A11 seam; lane 4 extends
+    p = sub.add_parser("alerts"); p.add_argument("--for-user", action="store_true")  # A11 seam
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("rehydrate")
+    # v1.1: the live demo, user-only (demo.run).
+    p = sub.add_parser("demo"); p.add_argument("--fast", action="store_true"); p.add_argument("--keep", action="store_true")
+    p.add_argument("--no-open", action="store_true"); p.add_argument("--cleanup", metavar="FOLDER")
     return parser
 
 
@@ -287,6 +293,8 @@ def dispatch(args) -> tuple[int, str]:
     if command == "send":
         if args.body is None:
             args.body = commands.read_body_file(args.body_file)
+        if args.sender is not None and args.kind is None:
+            raise util.usage("--kind is required with --from")
         if args.sender is None or args.kind is None:
             # The user's short form (AC-54): from the user, kind work unless named, to any node.
             state.check_user_only("send without --from")
@@ -408,7 +416,9 @@ def dispatch(args) -> tuple[int, str]:
         interlock.reconcile()  # stop and pause intents are reconciled before an explicit launch
         result = launcher.launch(args.node)
         code = {"confirmed": 0, "failed": 1, "capacity": util.EXIT_ADMISSION,
-                "uncertain": util.EXIT_UNCERTAIN}.get(result["outcome"], 1)
+                "uncertain": util.EXIT_UNCERTAIN,
+                # A start still inside its second confirm window: its outcome is not known yet, not a failure.
+                "pending": util.EXIT_UNCERTAIN}.get(result["outcome"], 1)
         # `started` is internal (tick accounting); the printed result keeps its published fields.
         return code, json.dumps({k: v for k, v in result.items() if k != "started"}) + "\n"
     if command == "_supervise":
@@ -541,16 +551,40 @@ def dispatch(args) -> tuple[int, str]:
     raise YggError(util.EXIT_USAGE, "unknown command")
 
 
-NO_PREVALIDATION = {"init", "hook", "_supervise", "plugins", "profile", "lane-check"}
+NO_PREVALIDATION = {"init", "hook", "_supervise", "plugins", "profile", "lane-check", "demo"}
 # Safety commands act on local evidence first; their validation never reads the tracker (I7).
 SAFETY_COMMANDS = {"stop", "pause", "resume"}
+# A broken config or profile file makes every validated command refuse. For the emergency commands the message also says why
+# that matters and what to do, never quoting the file.
+_BROKEN_FILE_NEXT_STEP = {
+    True: " Yggdrasil can't tell which project to act on until this file is fixed; fix that line and run the command again.",
+    False: " Yggdrasil can't tell which project to act on until this file is fixed; fix the file and run the command again.",
+}
+
+
+def _error_text(error: YggError, command) -> str:
+    from . import config
+    if command in SAFETY_COMMANDS and isinstance(error, config.BrokenFileError):
+        return error.message + "." + _BROKEN_FILE_NEXT_STEP[" at line " in error.message]
+    return error.message
+
+
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    command = None
     try:
         args = build().parse_args(argv)
+        command = args.command
         if not args.command:
             build().print_help()
             return 1
+        if args.command == "demo":
+            # The user-only guard reads only the environment and the working folder; after it the demo reads
+            # nothing of the user's (no config, state or tracker call in this process).
+            from . import state
+            state.check_user_verb("demo", None)
+            from .demo import run
+            return run.main(args)
         if args.command not in NO_PREVALIDATION and not (args.command == "config"):
             from . import config
             config.validate(check_plugins=True, scan_tracker=args.command not in SAFETY_COMMANDS)
@@ -559,7 +593,7 @@ def main(argv=None) -> int:
             sys.stdout.write(output)
         return code
     except YggError as error:
-        print(error.message, file=sys.stderr)
+        print(_error_text(error, command), file=sys.stderr)
         return error.code
     except subprocess.TimeoutExpired as error:
         print("deadline exceeded: " + str(error), file=sys.stderr)

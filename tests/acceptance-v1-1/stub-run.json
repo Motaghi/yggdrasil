@@ -1,0 +1,13 @@
+{
+  "counts": {
+    "failed": 63,
+    "passed": 1,
+    "skipped": 1,
+    "error": 0,
+    "total": 65
+  },
+  "passes": [
+    "tests/acceptance-v1-1/test_acceptance.py::test_ac23_empty_config_is_valid"
+  ],
+  "exitstatus": 1
+}

@@ -73,7 +73,7 @@ def on_post(event: dict) -> None:
     tool_use_id = str(event.get("tool_use_id") or "")
     if activation and _ACTIVATION.fullmatch(str(activation)) and _ID.fullmatch(tool_use_id):
         from . import hooks
-        clear = getattr(hooks, "clear_inflight", None)  # lane 1's record (same path as inflight_dir)
+        clear = getattr(hooks, "clear_inflight", None)  # the hooks module's record (same path as inflight_dir)
         if clear is not None:
             clear(str(activation), tool_use_id)
         else:

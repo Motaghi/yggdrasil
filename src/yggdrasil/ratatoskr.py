@@ -98,7 +98,7 @@ def send(sender_id: str, recipient_id: str, kind: str, body: str, *, relay_of: s
         _log(entry)
     if urgent:
         from . import t3
-        live = getattr(t3, "live_send", None)  # lane 3 (A11 AC-36): an urgent message also reaches a live thread
+        live = getattr(t3, "live_send", None)  # (A11 AC-36): an urgent message also reaches a live thread
         if live is not None:
             try:
                 live(dict(entry, body=body))
@@ -179,7 +179,7 @@ def inbox(node_id: str, ack: str | None = None) -> str:
     util.check_id(node_id, "node id", allow_reserved=True)
     caller = util.current_node()
     if ack is not None and caller is not None and caller != node_id:
-        # AC-88 row 2 (amendment 7): only the recipient or the user acks.
+        # AC-88 row 2: only the recipient or the user acks.
         raise util.refuse("identity: only " + node_id + " acknowledges its own messages")
     if caller is not None and caller != node_id:
         nodes = state.all_nodes()
@@ -234,7 +234,7 @@ def inbox(node_id: str, ack: str | None = None) -> str:
     listed.sort(key=lambda item: 0 if item.get("urgent") else 1)  # urgent first (AC-52), stable otherwise
     for item in listed:
         if workahead.hidden(node_id, item):
-            continue  # refers to a blocked later-stage package (Amendment A4): not shown until it may start
+            continue  # refers to a blocked later-stage package: not shown until it may start
         kind = item["kind"] + (", urgent" if item.get("urgent") else "")
         lines.append(item["msg_id"] + " from " + item["from"] + " [" + kind + "]\n"
                      + "```text\n" + item["body"] + "\n```")

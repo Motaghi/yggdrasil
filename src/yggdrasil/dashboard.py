@@ -72,7 +72,8 @@ def _stale() -> bool:
         age = (util.now() - util.parse_time(text)).total_seconds()
     except ValueError:
         return True
-    return age > 3 * float(config.get("tick_seconds", 15) or 15)
+    # Three ticks, and never under 3 s: a sub-second tick (the demo's) would call a busy conductor stopped.
+    return age > max(3 * float(config.get("tick_seconds", 15) or 15), 3.0)
 
 
 def _paused_line(programme: str) -> str | None:
@@ -238,7 +239,10 @@ def render(programme: str, *, check_stale: bool = False) -> str:
     paused = _paused_line(programme)
     if paused:
         out.append(paused)
-    out += ["<!DOCTYPE html>", '<html lang="en">', "<head>", '<meta charset="utf-8">',
+    refresh = config.get("dashboard_refresh_seconds")
+    head_refresh = (['<meta http-equiv="refresh" content="' + str(int(refresh)) + '">']
+                    if isinstance(refresh, int) and not isinstance(refresh, bool) and refresh > 0 else [])
+    out += ["<!DOCTYPE html>", '<html lang="en">', "<head>", '<meta charset="utf-8">', *head_refresh,
             "<title>" + _text(programme) + " dashboard</title>", "<style>" + STYLE + "</style>", "</head>",
             "<body>", "<h1>" + _text(programme) + "</h1>", "<p>" + _updated() + "</p>"]
     if paused:

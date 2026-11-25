@@ -1116,7 +1116,7 @@ def _remove_worktree(path: str, real: str, home: str, programme=None, project_id
             util.write_json(_holds_path(), holds)
 
 
-# ---------------------------------------------------------------- threads and evidence (ruling 106)
+# ---------------------------------------------------------------- threads and evidence
 
 def _show(thread: str) -> tuple[str, dict | None, str]:
     """(answer, payload, stderr): `json`, `gone` or `unreadable`."""
@@ -1289,7 +1289,7 @@ def node_thread(node_id: str) -> tuple[str | None, str | None]:
     return thread, spawned.get("t3_title")
 
 
-# ---------------------------------------------------------------- messages (ruling 105, B30)
+# ---------------------------------------------------------------- messages (B30)
 
 def marker(activation: str, message: str) -> str:
     return "[ygg " + activation + " " + message + "]"
@@ -1630,7 +1630,7 @@ def _commit_exit(node_id: str, activation: str, seen: dict) -> None:
     forget(activation)
 
 
-# ---------------------------------------------------------------- live-thread delivery (AC-36, fallback-v1.1)
+# ---------------------------------------------------------------- live-thread delivery (AC-36; the urgent live send is planned for v1.2)
 
 LIVE_SENDS = "t3-live-sends.jsonl"
 

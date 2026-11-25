@@ -56,6 +56,37 @@ def route_map(project_id: str):
     return {"forecast_end": forecast}, util.bullets(body, "Blockers")
 
 
+def blockers_label(project_id: str) -> str:
+    """The text status's blockers label (v1.1 AC-19): the time of the route map the blockers come from, and
+    a note when a work package or decision of the project changed after it. A route map written before the time
+    was recorded gives the plain label. `ygg status --json` does not use this."""
+    text = tracker.read_document(project_id, "route-map")
+    header, _ = util.split_frontmatter(text) if text else (None, "")
+    try:
+        written = util.parse_time(str((header or {}).get("written_at")))
+    except (TypeError, ValueError):
+        return "blockers"
+    label = "route map of " + written.strftime("%Y-%m-%d %H:%M") + " UTC"
+    latest = None
+    now = util.now()  # a time after now is two clocks disagreeing (an agent session reads the real one), not a change
+    for issue in tracker.issues(project_id):
+        if issue.get("kind") not in ("work-package", "decision"):
+            continue
+        for value in [issue.get("created_at"), issue.get("updated_at")] + \
+                [r.get("at") for r in issue.records + issue.comments]:
+            try:
+                moment = util.parse_time(str(value))
+            except (TypeError, ValueError):
+                continue
+            if moment > now:
+                continue
+            if latest is None or moment > latest:
+                latest = moment
+    if latest is not None and latest > written:
+        label += ", older than the latest change to its packages or decisions"
+    return "blockers (" + label + ")"
+
+
 def wip_limit(project_id: str) -> int | None:
     """The WIP limit through the layered configuration (preset, user config, profile, programme, PID)."""
     value = config.project_get("wip_limit", project_id)
@@ -261,7 +292,7 @@ def build_status() -> dict:
             outcome = "uncertain" if runtime["activation"] in uncertain else "confirmed"
             activation = {"id": runtime["activation"], "launcher": runtime.get("launcher", "headless"),
                           "outcome": outcome}
-        # Amendment A4: a team lead whose owed work is all withheld by the work-ahead gate stays queued
+        # A team lead whose owed work is all withheld by the work-ahead gate stays queued
         # with the reason of its lowest-numbered held package (derived on every read, never stored).
         waiting = None
         if node_state == "queued" and node.get("role") == "tl":
@@ -272,7 +303,7 @@ def build_status() -> dict:
             waiting = t3.reuse_hold(node["id"])  # a visible hold: its T3 thread can't take the work yet (I4)
         if node_state == "queued" and waiting is None:
             from . import launcher
-            # A visible hold (I4): a senior user owing only a retry whose package left testing (lane 3's predicate,
+            # A visible hold (I4): a senior user owing only a retry whose package left testing (the launcher's predicate,
             # the same as the launch refusal's).
             waiting = launcher.retry_hold_reason(node, nodes, owed_now.get(node["id"], []))
             if waiting:
@@ -336,7 +367,7 @@ def _project_suffix(project: dict) -> str:
     from . import stageclose
     words = stageclose.status_suffix(project["id"])
     try:
-        from . import mergecheck  # lane 4 (A11 AC-27, AC-83)
+        from . import mergecheck  # (A11 AC-27, AC-83)
         found = mergecheck.status_text(project["id"])
         if found:
             words += ", " + found
@@ -461,7 +492,7 @@ def human(status: dict) -> str:
             line += ", paused"
         lines.append(line)
         if project["blockers"]:
-            lines.append("  blockers: " + "; ".join(project["blockers"]))
+            lines.append("  " + blockers_label(project["id"]) + ": " + "; ".join(project["blockers"]))
     if status["decisions_open"]:
         lines.append("Decisions waiting: " + ", ".join(status["decisions_open"]))
     for item in status["morning_go_queue"]:
@@ -487,7 +518,7 @@ def _a11_lines(status: dict) -> list[str]:
     from . import cancel, review
     lines = review.status_lines(status) + cancel.status_lines({p["id"] for p in status.get("projects") or []})
     try:
-        from . import alertdelivery  # lane 4 (A11 AC-87 row 2): undelivered user alerts
+        from . import alertdelivery  # (A11 AC-87 row 2): undelivered user alerts
         lines += list(alertdelivery.status_lines() or [])
     except (ImportError, AttributeError):
         pass

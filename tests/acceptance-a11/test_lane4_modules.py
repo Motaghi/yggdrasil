@@ -460,7 +460,7 @@ def test_ac85_row1_merge_authority_and_one_repo(a11, run):
         a11.pid(repos=[{'path': str(a11.repo_a)}, {'path': str(a11.repo_b)}] if run == 'two-repos' else [])
         result = a11.run('pid', 'approve', 'alpha-p1')
         assert result.returncode == 3
-        assert ('projects with more than one repo come in v1.1' if run == 'two-repos' else 'a git project needs one repo') in result.stderr
+        assert ('projects with more than one repo are not in this release' if run == 'two-repos' else 'a git project needs one repo') in result.stderr
         assert present(a11.project())['state'] != 'executing'
     else:
         a11.merge_given()

@@ -513,7 +513,7 @@ UNAVAILABLE = "Yggdrasil tracker unavailable or corrupt; stop work now."
 # Git options that read files outside the repository (--no-index) or write one anywhere (--output), matched with
 # the abbreviations git accepts, in any position of any git call.
 FILE_OPTIONS = {"--no-index": len("--no-i"), "--output": len("--out")}
-# Read-only git (ruling 129, security review): rather than model the shell, only a fixed set of exact shapes is
+# Read-only git (security review): rather than model the shell, only a fixed set of exact shapes is
 # allowed, as one simple command with no paths and no option that takes a file. Anything else that reads with
 # git is refused with READ_ONLY_MESSAGE.
 READ_GIT = {"status", "diff", "log", "show", "rev-parse", "branch", "grep", "blame", "ls-files", "ls-tree",
@@ -725,7 +725,7 @@ OUTSIDE_MESSAGE = ("git --no-index and --output read or write files outside your
 
 
 def token_store_paths() -> list[str]:
-    """Paths of a file-based Linear token store (best effort; a credential broker is a v1.1 item)."""
+    """Paths of a file-based Linear token store (best effort; a credential broker is planned for a later release)."""
     paths = []
     try:
         from . import config
@@ -787,7 +787,7 @@ def secret_touched(tool: str, tool_input: dict) -> bool:
     """A tool input naming the token store or its folder: the serialised input of any tool searched for the
     paths, file tools by real path, and shell words by real path, by the store's file name (a relative name
     after a `cd`) and by glob patterns that match it. Best effort: any process of the user can read the store,
-    a known gap until the v1.1 broker."""
+    a known gap until the credential broker ships (planned for a later release)."""
     targets = _secret_targets()
     if not targets:
         return False
@@ -1189,7 +1189,7 @@ def frozen_commit_refusal(command: str, node: str, info: dict, cwd: str) -> str 
     return None
 
 
-# ---------------------------------------------------------------- the in-flight record (lane 2's busy reads it)
+# ---------------------------------------------------------------- the in-flight record (the busy module reads it)
 
 def inflight_dir(activation: str) -> Path:
     return state.root() / "inflight" / activation
@@ -1321,7 +1321,7 @@ def pretool_result(payload_text: str) -> tuple[int, str, str | None]:
         if launcher.stopped({"id": node, "programme": info.get("programme")}):
             return 2, "Yggdrasil emergency stop for this node; stop work now.", None
         if info.get("role") == "reviewer":
-            # Lane 3's reviewer rule set (A11 AC-94 row 1, AC-32 row 3): its text is the refusal.
+            # The reviewer rule set (A11 AC-94 row 1, AC-32 row 3): its text is the refusal.
             from . import permissions
             reviewer_refusal = getattr(permissions, "reviewer_refusal", None)
             refusal = reviewer_refusal(tool, tool_input, activation) if reviewer_refusal else None

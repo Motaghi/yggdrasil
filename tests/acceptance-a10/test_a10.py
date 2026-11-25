@@ -398,5 +398,5 @@ def test_codex_prompt_and_brief_delivered_privately(a10_tree, node):
     a10_tree.brief_seed(codex=True)
     result = a10_tree.launch_and_wait(node)
     assert result.returncode == 3
-    assert "Codex builds come in v1.1" in result.stderr
+    assert "Codex builds are not in this release" in result.stderr
     assert [call for call in a10_tree.launches(node) if call["binary"] == "codex"] == []

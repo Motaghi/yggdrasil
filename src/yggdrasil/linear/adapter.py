@@ -12,7 +12,7 @@ The Linear journal is the authority (ruling 86), but a changed guarded document 
 extends what the cache holds: journal entries may be appended or marked cleared, never altered or removed,
 and counters may only rise. Anything else is not adopted, the cache stays as it is, one
 `ygg-tracker-rewrite` alert is raised, and writes to that document are refused until it is resolved.
-Signing records (a MAC per entry) belongs with the v1.1 broker.
+Signing records (a MAC per entry) belongs with the credential broker, planned for a later release.
 
 Mapping (tracker standard v1, "PRINCE2 to tracker mapping"):
 
@@ -41,7 +41,7 @@ Design point, not built: edits made in Linear's own interface. The tick only che
 an issue or document changed in Linear by a person is not seen until a rehydrate, where it is refused unless
 an authority actor made it. Seeing such edits on every tick, for example authority comments that should wake
 a PM, needs a cheap changed-since query; the published API filters by `updatedAt`, so it costs one more
-request per tick. Webhooks are v1.1 (ruling 109).
+request per tick. Webhooks are planned for a later release (ruling 109).
 """
 
 from __future__ import annotations

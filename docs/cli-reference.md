@@ -10,11 +10,29 @@ Commands marked **you** are reserved for you, and commands marked **not in agent
 |---|---|
 | `ygg init [--preset starter\|solo-builder\|team] [--non-interactive] [--answers <file>] [--out <path>] [--force] [--track-records]` | **You.** Guided setup that writes a commented config. It adds `ygg-state/`, `ygg-state.safety/` and `ygg-tracker/` to the `.gitignore` next to the config; `--track-records` leaves `ygg-tracker/` out, so you can keep the records in git. |
 | `ygg doctor [--json]` | Show which tracker and launcher are active and whether each built-in option is ready, with the reason when one isn't (for Linear: whether credentials are stored; for T3: whether the `t3` command is set), and whether the lane check has a leak denylist. It makes no network call. It is meant only to read, with one exception: with `linear_token_store: file`, some invalid token files (a link, not a regular file, or one whose details can't be read) raise a `ygg-tracker-auth` alert and write the `linear-auth-failed` marker in the state folder; doctor then shows Linear as not ready. |
+| `ygg --version` | Print the version (`ygg 1.1.0`) and exit. It reads no config, profile or state. |
 | `ygg config explain [<key>] [--project <p>] [--package <id>] [--json]` | Show effective settings and the layer each came from. |
 | `ygg config validate [--project <p>]` | Check every configuration layer. |
 | `ygg plugins list [--json]` | List installed tracker, launcher and alert-forwarder plugins. |
 | `ygg profile show` | Print the loaded profile with secret-looking values hidden, or `none`. |
 | `ygg standard check [--file <path>]` | Validate the packaged tracker standard, or another file. |
+
+## Demo
+
+`ygg demo [--fast] [--keep] [--no-open]` and `ygg demo --cleanup <folder>`. **You.** A live, offline run of the real conductor with scripted stand-in agents, in a temporary folder, about two minutes long. It needs `git` on your `PATH` and no AI account. The agents never call a model, and the demo makes no outside connection. It is refused (exit 3) from every agent session, like the other commands marked **you**.
+
+The demo works in its own folder under your `TMPDIR` (`ygg-demo-...`, mode 0700) with its own config, profile, state, tracker, home folder for git and git settings. It never reads or writes yours, nor your Claude or Codex folders. Programme `alpha` and project `alpha-p1` get a brief, an approved plan, two work packages that are reviewed and approved, a merge into `main` and a close. Seven lines say where it is: `demo: 1/7 brief written`, `2/7 plan approved`, `3/7 WP-1 ready for review`, `4/7 WP-2 ready for review`, `5/7 reviews approved`, `6/7 merged into main` and `7/7 project closed`. After line 1 it prints where the dashboard page is. The page refreshes every 2 seconds and opens in your browser unless you pass `--no-open`. If the dashboard is not in this release, it says `demo: dashboard not in this release` and carries on.
+
+| Option | What it does |
+|---|---|
+| `--fast` | No pause between the scripted steps, so the run is shorter than the default two minutes. |
+| `--keep` | Keep the temporary folder when the run ends. A failed run always keeps it. |
+| `--no-open` | Don't open the dashboard in a browser. |
+| `--cleanup <folder>` | Stop and remove a demo folder left behind by a demo that was killed. It first checks that the folder is a private demo folder under your `TMPDIR`, and it refuses, touching nothing, if it isn't (`demo: <folder> is not a demo folder` or `demo: <folder> is not a safe demo folder: <reason>`). It also refuses while that demo is still running. |
+
+When the demo stops, on success, on failure or on Ctrl-C, a hangup or a termination signal, it stops the conductor and every agent it started, then removes its folder (unless `--keep` or a failure). A demo that was killed so hard it could not clean up is reported by the next `ygg demo`, which prints the `ygg demo --cleanup <folder>` command to run and carries on. A failure prints `demo: failed at <setup, step n or cleanup>: <reason>` on stderr and keeps the folder.
+
+Exit codes: 0 success; 1 failure or a usage error; 3 refused as a user-only command; 129, 130, 131 and 143 after a hangup, interrupt, quit or termination signal.
 
 ## Programmes, projects and nodes
 
@@ -39,8 +57,8 @@ Commands marked **you** are reserved for you, and commands marked **not in agent
 | `ygg digest --date <yyyy-mm-dd>` | Write the daily digest. |
 | `ygg summary [--since <span>]` | For each project with a work-item change in the span (default `1h`; for example `30m`, `2h`, `2d`), or with a decision waiting for you whatever its age: the work items finished and those being checked, then how many decisions wait for you. Prints `No change in ...` when there is neither. From an agent session, only that session's programme. |
 | `ygg alerts [--for-user] [--json]` | List the alerts in `alerts.jsonl`, oldest first, with each one's class. `--for-user` keeps only the ones meant for you. `--json` also gives each one's next step. |
-| `ygg dashboard <programme> [--no-open]` | Write the programme's dashboard page, `dashboard/<programme>.html` in the state folder, print its path and open it (unless `--no-open`). The page is static, with a column each for to do, working, being checked, done and needs you. The conductor also rewrites it on every pass. |
-| `ygg dashboard serve <programme> --port <n>` | **You.** Not in this release: it is refused. It would serve the page on 127.0.0.1 only. |
+| `ygg dashboard <programme> [--no-open]` | Write the programme's dashboard page, `dashboard/<programme>.html` in the state folder, print its path and open it (unless `--no-open`). The page is a plain file, with a column each for to do, working, being checked, done and needs you. The conductor also rewrites it on every pass. When `dashboard_refresh_seconds` is set, the page reloads itself at that interval. |
+| `ygg dashboard serve <programme> --port <n>` | **You.** Serves the page on 127.0.0.1 only, read only. It is behind the `dashboard_serve` switch: when that switch ships off, the command is refused as not in this release. The [release notes](releases/v1.1.0.md) say which way it shipped. A served page reloads itself when `dashboard_refresh_seconds` is set. |
 
 ## Messages
 

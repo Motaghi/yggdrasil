@@ -4,7 +4,7 @@ Yggdrasil lets you hand a big job to a team of AI agents and stay in charge. You
 
 You talk to one AI session, your **main session** (the docs call it L1). Plans, decisions, reports and approvals are written down in a tracker, so you can see what happened and why.
 
-Status: version 1.0.0; see the [release notes](docs/releases/v1.0.0.md). Read [Safety](#safety) before you run it on anything that matters.
+Status: version 1.1.0; see the [release notes](docs/releases/v1.1.0.md). Read [Safety](#safety) before you run it on anything that matters.
 
 ## Who it's for
 
@@ -13,7 +13,7 @@ Yggdrasil is for people who already use Claude Code and Codex and want AI agents
 ## What you get
 
 - **One main session.** You talk to one AI session. It asks you the questions that need your answer, and you can start or resume it in any chat.
-- **A team behind it.** Each project gets a project manager that plans the work and reports to you. Under it, team leads run the work and hand pieces to worker agents, while a paired reviewer writes down what "good" means before work starts and tests the result afterwards. In projects on a git repository, a project reviewer on the configured pair model checks each piece of work before it counts as done; with the default setup that is a model from the other family. Projects on a folder of documents (`vault-docs`) are a preview in v1.0: their work gets no automatic per-piece review.
+- **A team behind it.** Each project gets a project manager that plans the work and reports to you. Under it, team leads run the work and hand pieces to worker agents, while a paired reviewer writes down what "good" means before work starts and tests the result afterwards. In projects on a git repository, a project reviewer on the configured pair model checks each piece of work before it counts as done; with the default setup that is a model from the other family. Projects on a folder of documents (`vault-docs`) are a preview in v1.1: their work gets no automatic per-piece review.
 - **A written record.** Plans, decisions, reports and approvals are written to a **tracker**: plain files on your computer that you can read at any time, or a Linear team. Agents are told to keep their notes there too, so if a session stops, the next one picks up from the tracker. Nothing forces an agent to record everything it does, and stop and pause markers live in a local folder, not the tracker.
 - **Separate working copies.** Each team gets its own git branch and worktree, and agents are told to work there, not in your own checkout. This is a convention, not a wall: agents run as your OS user, and one that goes outside its worktree can still change your checkout (see [Known gaps](docs/security.md#known-gaps)).
 - **Overnight work inside limits you set.** You can let work continue while you are away, for a set time or up to a set point. In the morning you get a separate summary to accept or reject. The limits are accident guards, not containment, and nothing caps spending; see [Security](docs/security.md).
@@ -22,11 +22,22 @@ Yggdrasil is for people who already use Claude Code and Codex and want AI agents
 
 You do this in a conversation with your AI tool.
 
-1. **Ask it to install Yggdrasil.** Say: "Install Yggdrasil with `uv tool install git+https://github.com/Motaghi/yggdrasil@v1.0.0`, copy the `skills/yggdrasil-l1` folder from that repository into my skills folder, and set up `ygg conductor run` as a background service with `YGG_CONFIG` pointing at my config file." A **skill** is a small instruction pack that teaches your AI tool a new job; this one teaches it how to be your main session. The **conductor** is the small program that starts the agents when there is work for them. It must keep running for Yggdrasil to work. The `@v1.0.0` pins this release; leave it off (`uv tool install git+https://github.com/Motaghi/yggdrasil`) to install the newest code on the main branch instead.
+1. **Ask it to install Yggdrasil.** Say: "Install Yggdrasil with `uv tool install git+https://github.com/Motaghi/yggdrasil@v1.1.0`, copy the `skills/yggdrasil-l1` folder from that repository into my skills folder, and set up `ygg conductor run` as a background service with `YGG_CONFIG` pointing at my config file." A **skill** is a small instruction pack that teaches your AI tool a new job; this one teaches it how to be your main session. The **conductor** is the small program that starts the agents when there is work for them. It must keep running for Yggdrasil to work. The `@v1.1.0` pins this release; leave it off (`uv tool install git+https://github.com/Motaghi/yggdrasil`) to install the newest code on the main branch instead.
 2. **Answer about five setup questions.** What the work mostly is, which AI tool you have, where to keep the records, how much the agents may do without asking, and which words you prefer. Yggdrasil picks defaults from your answers.
 3. **Say "Start a Yggdrasil project".** The session asks you a few short questions about what you want, writes that up as a project brief, and sets the project up.
 
 Prefer the terminal, or want the details? See [Getting started](docs/getting-started.md).
+
+## Try the demo
+
+Want to see Yggdrasil work before you set anything up? `ygg demo` runs a small project from start to finish on your computer in about two minutes. It needs no AI account and no login, and it makes no outside connection. It runs the real conductor, but the agents are scripted stand-ins that do a fixed job and never call a model. You need `git` installed.
+
+```bash
+uv tool install git+https://github.com/Motaghi/yggdrasil@v1.1.0
+ygg demo
+```
+
+The demo works in a temporary folder, and it never reads or changes your config, profile, state, tracker, git settings or Claude and Codex folders. Seven progress lines show a brief written, a plan approved, two pieces of work sent for review and approved, the result merged and the project closed. It also writes a dashboard page that refreshes every two seconds and opens it in your browser; add `--no-open` to skip that. `--fast` skips the pauses between steps, `--keep` leaves the temporary folder in place when it finishes, and `ygg demo --cleanup <folder>` stops and removes a folder that a killed demo left behind. Only you can start it, not an agent session. See the [CLI reference](docs/cli-reference.md#demo) for the details.
 
 ## What a day looks like
 
@@ -42,29 +53,30 @@ Claude Code (Anthropic), Codex (OpenAI), Linear and T3 Code are named only to sa
 
 ## Safety
 
-Yggdrasil's checks are **accident guards**. They catch an agent that gets confused, misreads its role or takes a shortcut. They do **not** contain a hostile agent, or an agent that follows instructions planted in a web page, file or message it reads. Such an agent can get around them, because agents run as your own OS user. The ways around are listed under [Known gaps](docs/security.md#known-gaps). Containment, with a separate broker user and a sandbox per agent, is planned for v1.1.
+Yggdrasil's checks are **accident guards**. They catch an agent that gets confused, misreads its role or takes a shortcut. They do **not** contain a hostile agent, or an agent that follows instructions planted in a web page, file or message it reads. Such an agent can get around them, because agents run as your own OS user. The ways around are listed under [Known gaps](docs/security.md#known-gaps). Containment, with a separate broker user and a sandbox per agent, is planned for a later release.
 
 What the guards do today:
 
 - Every Claude Code agent session gets a guard hook that refuses shell commands which push to anything other than `ygg/...` branches, force-push, delete, rewrite history, skip the push hook, write git refs directly or send data out by a known pattern.
 - A pre-push check lets an agent push only its own project branch, only to the remote you had when you approved the plan, and refuses any push that touches CI workflows unless the approved plan allows workflow changes.
-- Approving plans and phases, deciding questions, granting overnight envelopes, stopping and resuming are refused from every session the conductor started. Your main session is an AI session that holds your authority and runs them for you, so it acts only on your answers.
+- Approving plans and phases, deciding questions, granting overnight envelopes, stopping and resuming are refused from every session the conductor started. Your main session is an AI session that holds your authority and runs them for you. Its instructions tell it to act only on your answers; nothing checks that (see [Known gaps](docs/security.md#known-gaps)).
 - You can pause or stop everything at any time.
 
-Until v1.1, run Yggdrasil on work that is backed up and not confidential, in an OS account or machine that holds no credentials you don't want agents to reach, and watch what it does. Nothing limits how much model usage the agents spend. The details are in [Security](docs/security.md).
+Until containment ships, run Yggdrasil on work that is backed up and not confidential, in an OS account or machine that holds no credentials you don't want agents to reach, and watch what it does. Nothing limits how much model usage the agents spend. The details are in [Security](docs/security.md).
 
 ## Status
 
 | Part | Status |
 |---|---|
-| The core: the conductor, approvals, the files tracker, starting agents headless with Claude Code, with Codex for the project reviewer | In v1.0.0 |
-| Projects on a folder of documents (`vault-docs`) | Preview in v1.0.0: no automatic per-piece review |
-| Agents other than the project reviewer on Codex | Planned for v1.1 |
-| Keeping records in Linear | In v1.0.0; the release was proven on it end to end. See [Trackers](docs/trackers.md#linear-tracker) |
-| Starting agents in T3 Code | Experimental in v1.0.0, for Claude Code sessions; see [Launchers](docs/launchers.md#t3) and its known gaps in [Security](docs/security.md#known-gaps) |
+| The core: the conductor, approvals, the files tracker, starting agents headless with Claude Code, with Codex for the project reviewer | In v1.1.0 |
+| Projects on a folder of documents (`vault-docs`) | Preview in v1.1.0: no automatic per-piece review |
+| Agents other than the project reviewer on Codex | Planned for v1.1.1 |
+| Keeping records in Linear | In v1.1.0. v1.0.0 was proven on it end to end; v1.1.0 adds a regression test against a test server. See [Trackers](docs/trackers.md#linear-tracker) |
+| Starting agents in T3 Code | Experimental in v1.1.0, for Claude Code sessions; see [Launchers](docs/launchers.md#t3) and its known gaps in [Security](docs/security.md#known-gaps) |
 | Building a North Star (a short statement of what a project is for) by conversation | Not in this build |
-| Containment of agents (separate broker user, sandbox per agent) | Planned for v1.1 |
-| A limit on the number of agents running at once | In v1.0.0: `max_concurrent_sessions` |
+| Containment of agents (separate broker user, sandbox per agent) | Planned for a later release |
+| A limit on the number of agents running at once | In v1.1.0: `max_concurrent_sessions` |
+| A live demo with no AI account (`ygg demo`) | In v1.1.0 |
 | Limits on spending | Not in this build |
 
 ## Documentation
@@ -79,6 +91,7 @@ Until v1.1, run Yggdrasil on work that is backed up and not confidential, in an 
 - [Security](docs/security.md): what the guards do, and the known gaps
 - [CLI reference](docs/cli-reference.md): every `ygg` command
 - [Contributing](docs/contributing.md): tests, the leak scan and plugins
+- [Release notes for v1.1.0](docs/releases/v1.1.0.md): what is new, what moved to later releases, and the known issues
 - [Release notes for v1.0.0](docs/releases/v1.0.0.md): what was proven, what changed, and the known issues
 - [Reporting a vulnerability](SECURITY.md)
 

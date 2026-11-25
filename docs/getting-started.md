@@ -8,7 +8,7 @@ Read [Security](security.md) first. The guards in this version catch accidents; 
 
 - **macOS or Linux.** Yggdrasil uses POSIX file locks, `ps` and the load average; Windows is not supported.
 - **Python 3.12 or later**, and `uv` or `pipx` to install the `ygg` command.
-- **Claude Code and Codex, both installed and logged in.** In v1.0 every session runs on Claude Code except the project reviewer, which checks each work package on a GPT-family model through Codex, so the review comes from another model family. Without Codex the project reviewer runs on the Claude model instead. A Codex-only setup is not supported in v1.0: project managers, team leads, workers and senior users on Codex are refused ("Codex builds come in v1.1").
+- **Claude Code and Codex, both installed and logged in.** In v1.1 every session runs on Claude Code except the project reviewer, which checks each work package on a GPT-family model through Codex, so the review comes from another model family. Without Codex the project reviewer runs on the Claude model instead. A Codex-only setup is not supported in v1.1: project managers, team leads, workers and senior users on Codex are refused ("Codex builds are not in this release").
 - **Your agreement to the agents' permissions.** Yggdrasil starts Claude Code as `claude -p --settings <file> --model <model> --effort <effort>`, with the prompt on standard input, and passes no permission flags. Agents run with Yggdrasil's own Claude Code settings folder, so what they may do without asking comes from the rules you agree to once with `ygg agents allow-standard --yes` or `ygg agents allow-minimal`. Until you agree, launches are refused. See [Security](security.md#what-agents-may-do-without-asking).
 - **A Claude Code sign-in the agents can use.** Headless Claude Code agents don't run with your own Claude Code folder (`~/.claude`). By default Yggdrasil points them at its own folder, `~/.config/yggdrasil/agent-claude` (the `agent_claude_config_dir` setting), through `CLAUDE_CONFIG_DIR`. That keeps your own instructions, hooks, skills and settings away from agents, but it also means the sign-in kept in your own Claude Code folder may not reach them. Give the conductor's environment a credential Claude Code reads from the environment, such as `CLAUDE_CODE_OAUTH_TOKEN` (made with `claude setup-token`) or `ANTHROPIC_API_KEY`; those pass to agents (see [Agent environment](configuration.md#agent-environment)). Or sign in once inside Yggdrasil's folder with `CLAUDE_CONFIG_DIR=~/.config/yggdrasil/agent-claude claude`. Codex sessions use your own Codex login. T3 sessions are different: they run in the T3 server's environment, so their sign-in and settings are whatever that server uses.
 - **git**, for projects that work on code or other files kept in a git repo.
@@ -25,11 +25,11 @@ You do all three in a conversation with your AI tool.
 
 Say:
 
-> Install Yggdrasil with `uv tool install git+https://github.com/Motaghi/yggdrasil@v1.0.0`, copy the `skills/yggdrasil-l1` folder from that repository into my skills folder, and set up `ygg conductor run` as a background service with `YGG_CONFIG` pointing at my config file.
+> Install Yggdrasil with `uv tool install git+https://github.com/Motaghi/yggdrasil@v1.1.0`, copy the `skills/yggdrasil-l1` folder from that repository into my skills folder, and set up `ygg conductor run` as a background service with `YGG_CONFIG` pointing at my config file.
 
 This does three things:
 
-- installs the `ygg` command (with uv, into `~/.local/bin`), pinned to release v1.0.0. Leave off `@v1.0.0` to install the newest code on the main branch instead;
+- installs the `ygg` command (with uv, into `~/.local/bin`), pinned to release v1.1.0. Leave off `@v1.1.0` to install the newest code on the main branch instead;
 - adds the `yggdrasil-l1` **skill**, a small instruction pack that teaches your AI tool how to be your main session (see [Installing the main-session skill](#installing-the-main-session-skill));
 - sets up the **conductor**, the small program that starts the agents when there is work for them. It uses no AI itself.
 
@@ -40,7 +40,7 @@ The conductor is required: while it isn't running, no agent starts. It must also
 The session runs `ygg init` in the folder that will hold your Yggdrasil config and records (for example `~/yggdrasil`) and asks you:
 
 1. **What is the work mostly?** Building software, writing and research, business tasks, or a mix.
-2. **Which AI tool do you have?** Claude Code, Codex, both, or T3 Code. Answer Claude Code or both: Codex alone gives a Codex-only setup, which v1.0 doesn't support.
+2. **Which AI tool do you have?** Claude Code, Codex, both, or T3 Code. Answer Claude Code or both: Codex alone gives a Codex-only setup, which v1.1 doesn't support.
 3. **Where should the records be kept?** In files on this computer, or in Linear.
 4. **How much may the agents do without asking?** Ask me before each phase, or continue overnight within limits I set.
 5. **Which words should Yggdrasil use?** Plain words (recommended), or PRINCE2® terms.
@@ -83,11 +83,11 @@ Every step above can be done by hand.
 **Install** with uv or pipx:
 
 ```bash
-uv tool install git+https://github.com/Motaghi/yggdrasil@v1.0.0
-pipx install git+https://github.com/Motaghi/yggdrasil@v1.0.0
+uv tool install git+https://github.com/Motaghi/yggdrasil@v1.1.0
+pipx install git+https://github.com/Motaghi/yggdrasil@v1.1.0
 ```
 
-These install release v1.0.0. To install the newest code on the main branch instead, leave off `@v1.0.0`, for example `uv tool install git+https://github.com/Motaghi/yggdrasil`.
+These install release v1.1.0. To install the newest code on the main branch instead, leave off `@v1.1.0`, for example `uv tool install git+https://github.com/Motaghi/yggdrasil`.
 
 Or install from a clone, which also gives you the skill and the examples:
 

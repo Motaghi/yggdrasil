@@ -13,7 +13,7 @@ If a start fails because of rate limits or an exhausted quota, the node waits an
 
 ## Headless
 
-The headless launcher runs Claude Code or Codex in the node's working folder. GPT-family models run on Codex and the others on Claude Code. In v1.0 only project reviewers may run on Codex; a project manager, team lead, worker or senior user on a GPT-family model is refused ("Codex builds come in v1.1"). Each start:
+The headless launcher runs Claude Code or Codex in the node's working folder. GPT-family models run on Codex and the others on Claude Code. In v1.1 only project reviewers may run on Codex; a project manager, team lead, worker or senior user on a GPT-family model is refused ("Codex builds are not in this release"). Each start:
 
 - refuses to start unless `ygg` is on the conductor's `PATH`, and resolves it to an absolute path;
 - for Claude Code, writes a settings file that registers Yggdrasil's guard hook for every tool call by that absolute path, with `disableAllHooks: false`, and passes it with `--settings`;
@@ -25,7 +25,7 @@ If the hooks can't be set up, the start is refused (exit code 3) and nothing run
 
 The Claude Code command is `claude -p --settings <file> --model <model> --effort <effort>`, plus `--setting-sources` and, by default, `--add-dir` for the working folder, so the agent reads its project's `CLAUDE.md` but not the project's own settings (see `agent_project_settings` in [Configuration](configuration.md#key-settings)). The prompt goes to Claude Code on standard input, never on the command line. The effort is also in `YGG_EFFORT`. No permission flags are passed: what the agent may do without asking comes from the permission rules you agreed to, which Yggdrasil writes into the settings file (see [Security](security.md#what-agents-may-do-without-asking)).
 
-The Codex command is `codex exec` with `--sandbox workspace-write`, the model and the effort (`model_reasoning_effort`), and the prompt on standard input. Codex has no guard hook. In v1.0 the only Codex sessions are project reviewers. A Codex reviewer runs with an empty scratch folder as its writable workspace, so its checkout stays read-only, and gets no write access to Yggdrasil's state or tracker folders; it writes only its verdict file.
+The Codex command is `codex exec` with `--sandbox workspace-write`, the model and the effort (`model_reasoning_effort`), and the prompt on standard input. Codex has no guard hook. In v1.1 the only Codex sessions are project reviewers. A Codex reviewer runs with an empty scratch folder as its writable workspace, so its checkout stays read-only, and gets no write access to Yggdrasil's state or tracker folders; it writes only its verdict file.
 
 When a profile sets `hub_base_url`, the headless launcher exports it to every session as `ANTHROPIC_BASE_URL`, and `launch_env` adds further variables (never `YGG_` ones). The core assumes neither. Neither applies to T3 sessions, which run in the T3 server's environment (see [Configuration](configuration.md#agent-environment)).
 
@@ -44,7 +44,7 @@ A node's first session starts its thread; later sessions send into the same thre
 
 With `YGG_NODE` set, every `--from` and `--as` must be that node or one of its children, and the commands reserved for you are refused. These markers are environment variables, not credentials; see [Security](security.md#known-gaps).
 
-Workers are handled differently. A worker registered as a node (`ygg node add --role worker`) runs as its own Claude Code session with its own `YGG_NODE`; in v1.0 a worker can't run on Codex. A worker started through Claude Code's Agent tool runs inside its team lead's session and gets its id in the prompt, so its identity rests on the prompt alone.
+Workers are handled differently. A worker registered as a node (`ygg node add --role worker`) runs as its own Claude Code session with its own `YGG_NODE`; in v1.1 a worker can't run on Codex. A worker started through Claude Code's Agent tool runs inside its team lead's session and gets its id in the prompt, so its identity rests on the prompt alone.
 
 ## Where sessions run
 

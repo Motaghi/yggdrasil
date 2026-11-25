@@ -368,10 +368,26 @@ def redact(text: str) -> str:
 SECRET_KEY_RE = re.compile(r"(secret|token|password|passwd|credential|api_key|apikey|private_key)", re.I)
 
 
+SECRET_KEY_PARTS = frozenset(("key", "auth", "authorization", "cookie", "session", "bearer", "signature", "pat"))
+# Names with a secret-looking part that hold a non-secret (a short team prefix), shown as they are. The exemption
+# applies only to the second match: whatever the old substring rule hides stays hidden.
+SHOWN_KEY_NAMES = frozenset(("linear_team_key",))
+
+
+def secret_looking_key(key: str) -> bool:
+    """Today's substring match, plus a second one: the key name split on `_`, `-` and `.` has a part, in any
+    case, that is a whole secret word (`STRIPE_KEY`, `SESSION_COOKIE`). The second match only adds names."""
+    if SECRET_KEY_RE.search(key):
+        return True
+    if key.lower() in SHOWN_KEY_NAMES:
+        return False
+    return any(part in SECRET_KEY_PARTS for part in re.split(r"[_.\-]", key.lower()))
+
+
 def redact_profile(value, key: str = ""):
     """A copy of profile data for display, with every value under a secret-looking key replaced."""
     # A secret-looking key hides its whole value, nested containers included.
-    if key and SECRET_KEY_RE.search(key) and value not in (None, "", {}, []):
+    if key and secret_looking_key(key) and value not in (None, "", {}, []):
         return "[redacted]"
     if isinstance(value, dict):
         return {(redact(k) if isinstance(k, str) else k): redact_profile(v, str(k)) for k, v in value.items()}
@@ -686,7 +702,7 @@ def trusted_git(*args, check: bool = False):
 # core.hooksPath and core.fsmonitor are allowed because GIT_SAFETY forces both off for Yggdrasil's own calls
 # (A10 AC-13), and agent worktrees use Yggdrasil's own hooks folder. At a launch, an agent's own git would run an
 # fsmonitor program, so there core.fsmonitor is held to AGENT_EXACT_VALUES (AC-41). Yggdrasil's own agent git keys
-# are allowed only with the values in EXACT_VALUES (amendment 18).
+# are allowed only with the values in EXACT_VALUES.
 ALLOWED_KEY = re.compile(r"^(user\.(name|email)"
                          r"|core\.(bare|repositoryformatversion|filemode|ignorecase|precomposeunicode|logallrefupdates"
                          r"|hookspath|fsmonitor|untrackedcache)"
@@ -701,7 +717,7 @@ ALLOWED_KEY = re.compile(r"^(user\.(name|email)"
                          r"|extensions\.worktreeconfig"
                          r"|ygg\.[a-z0-9]+"
                          r"|lfs\.repositoryformatversion)$")
-# Keys allowed only with these values (amendment 18, AC-33, AC-41): what Yggdrasil writes into a lane's worktree
+# Keys allowed only with these values (AC-33, AC-41): what Yggdrasil writes into a lane's worktree
 # config so agent git never waits on GPG or an editor, and an fsmonitor that is off.
 EXACT_VALUES = {"commit.gpgsign": ("false",), "core.editor": ("true",), "sequence.editor": ("true",)}
 AGENT_EXACT_VALUES = dict(EXACT_VALUES, **{"core.fsmonitor": ("false", "no", "off", "0")})

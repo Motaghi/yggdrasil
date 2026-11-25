@@ -34,7 +34,7 @@ def outcome(key: str, record: dict) -> str | None:
     if end.get("spawn_failed") or end.get("capacity") or end.get("ambiguous"):
         return None
     if end.get("crashed"):
-        return "fail"  # lane 3's exit record: a signal Yggdrasil didn't send
+        return "fail"  # the exit record: a signal Yggdrasil didn't send
     code = end.get("exit_code")
     if code == 0:
         return "ok"

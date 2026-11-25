@@ -55,7 +55,9 @@ ygg config explain review_rounds --project website-redesign-p1
 - unknown plugin names, listing the ones available;
 - plugins with an unsupported `api_version`.
 
-Every command except `init`, `config`, `plugins`, `profile`, `hook` and `_supervise` runs the same validation first and stops with the same message if something is wrong.
+Every command except `init`, `config`, `plugins`, `profile`, `hook`, `lane-check`, `demo` and `_supervise` runs the same validation first and stops with the same message if something is wrong.
+
+A config file or a profile that exists but isn't valid YAML, or isn't a mapping, is an error that names the file (`<file>: not valid YAML at line <n>` or `<file>: not a mapping`) and never quotes its contents; an empty file is an empty config. Every command that runs this validation refuses with this error, `ygg stop`, `ygg pause` and `ygg resume` included, because with an unreadable file Yggdrasil can't know which folders or which tracker it would act on, and acting on the defaults could report success on the wrong project. For those three the message adds the next step: `Yggdrasil can't tell which project to act on until this file is fixed; fix that line and run the command again.` Fix the file first. The commands listed above that skip the validation, such as `init` and `profile show`, don't need the config to do their job, so a broken config file doesn't stop them.
 
 Selecting a plugin, or adding `plugin_paths`, makes `ygg` import Python code. Use only plugins and config files you trust.
 
@@ -69,11 +71,11 @@ Defaults are those in the core config.
 | `files_root` | `./ygg-tracker` in the current folder; `ygg init` writes `./ygg-tracker` next to the config | Folder for tracker files. |
 | `state_root` | `~/.local/state/yggdrasil`; `ygg init` writes `./ygg-state` next to the config | Folder for local working state. |
 | `launcher` | `headless` | How sessions start: `headless` or `t3`. See [Launchers](launchers.md). |
-| `launcher_cli` | `claude-code` | Keep `claude-code` in v1.0. `codex` makes `codex_models` the default model map, which puts every role on a GPT-family model, and v1.0 refuses Codex for project managers, team leads, workers and senior users ("Codex builds come in v1.1"). `ygg init` writes `codex` if you answer Codex alone, or if Codex is the only tool it finds. |
+| `launcher_cli` | `claude-code` | Keep `claude-code` in v1.1. `codex` makes `codex_models` the default model map, which puts every role on a GPT-family model, and v1.1 refuses Codex for project managers, team leads, workers and senior users ("Codex builds are not in this release"). `ygg init` writes `codex` if you answer Codex alone, or if Codex is the only tool it finds. |
 | `vocabulary` | `plain` | `plain` or `prince2` labels in the `ygg status` text and the main-session skill. JSON output, record kinds and command names never change. |
 | `alert_forwarder` | `auto` | Every alert is appended to `alerts.jsonl` in the state folder. With `auto`, the conductor also delivers each alert meant for you: to the main session's T3 thread when `alert_t3_thread` is set, else (or if that send fails) as a macOS notification unless `alert_macos` is `off`, and to `alert_command` when you set one, with the alert as JSON on its standard input. Delivery is retried, with longer gaps, up to `alert_max_attempts` times. `jsonl` keeps alerts in the file only. |
-| `models` | `claude-opus-5-5`, effort `high`, paired with `gpt-6.1-sol`, effort `xhigh` | The model map. GPT-family models run on Codex. In v1.0 only the project reviewer may run on Codex: it uses the pair model when Codex is installed, else the main model, and `models.review_model` names another. Every other role must use a Claude model. The programme reviewer always runs on the core Claude model. |
-| `codex_models` | `gpt-6.1-sol`, efforts `high` and `xhigh` | The model map used when `launcher_cli` is `codex`. Not usable in v1.0; see `launcher_cli`. |
+| `models` | `claude-opus-5-5`, effort `high`, paired with `gpt-6.1-sol`, effort `xhigh` | The model map. GPT-family models run on Codex. In v1.1 only the project reviewer may run on Codex: it uses the pair model when Codex is installed, else the main model, and `models.review_model` names another. Every other role must use a Claude model. The programme reviewer always runs on the core Claude model. |
+| `codex_models` | `gpt-6.1-sol`, efforts `high` and `xhigh` | The model map used when `launcher_cli` is `codex`. Not usable in v1.1; see `launcher_cli`. |
 | `review_rounds` | `5` | How many write-and-review rounds a work item gets before it goes to the project manager as a concern. |
 | `delivery_approach_default` | `agile` | The delivery approach for a project plan that doesn't name one. |
 | `agile_cadence_default` | `flow` | `flow` or `timebox` for agile projects. |
@@ -90,6 +92,7 @@ Defaults are those in the core config.
 | `retry_limit` | `2` | Restarts before a session is marked stalled. |
 | `settle_delay_seconds` | `30` | Pause between session starts before load is measured again. |
 | `stop_grace_seconds` | `10` | How long an emergency stop waits before killing. |
+| `dashboard_refresh_seconds` | unset | A positive whole number. When set, the dashboard page, the file and the served page alike, asks the browser to reload itself every that many seconds. Unset leaves the page unchanged. `ygg demo` sets it to 2 in its own config. |
 | `l1_lock_ttl_minutes` | `30` | Time limit on the main session's lock. |
 | `checkpoint_batch_hours` | `4` | Longest a project manager waits to process check-ins in one batch. |
 | `plugin_paths` | none | Extra folders searched for plugins. `YGG_PLUGIN_PATH` does the same. |

@@ -82,6 +82,8 @@ def run(preset: str | None, non_interactive: bool, answers_file: str | None, out
                 raise util.usage("invalid answer for '" + field + "': " + str(value))
             answers[field] = value
     interactive = not non_interactive and sys.stdin.isatty()
+    if not non_interactive and not interactive and not answers_file:
+        sys.stderr.write("no terminal: the five questions were skipped and their defaults used\n")
     if interactive:
         for field in QUESTIONS:
             if field not in answers:

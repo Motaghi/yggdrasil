@@ -65,7 +65,7 @@ def _check_topology(nodes: dict) -> None:
             continue  # reviewers: programme file, role checked when read, parented to the programme
         source = tracker.nodes_file(node["project"])
         if node["role"] == "reviewer" and node["pairs_with"]:
-            # A project reviewer (A11 amendment 23) checks finished work for the whole project: it pairs with no node.
+            # A project reviewer checks finished work for the whole project: it pairs with no node.
             raise tracker.corrupt(source, "reviewer " + node["id"] + " has pairs_with; reviewers pair with no node")
         for paired in node["pairs_with"]:
             target = nodes.get(paired)
@@ -142,7 +142,8 @@ def caller_id() -> str:
 # Verbs that start, supervise or drive sessions, rebuild state, feed events or take the cockpit lock. A managed
 # session may run none of them; the value says whether the subcommand belongs to the verb's name.
 USER_VERBS = {"launch": False, "_supervise": False, "conductor": True, "heimdall": True, "rehydrate": False,
-              "event": True, "attach": False, "detach": False, "t3": True, "agents": True}
+              "event": True, "attach": False, "detach": False, "t3": True, "agents": True,
+              "demo": False}
 
 
 MANAGED_MARKER = ".ygg-managed"

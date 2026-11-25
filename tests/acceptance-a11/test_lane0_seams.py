@@ -94,7 +94,7 @@ def test_ac99_row1_codex_roles(a11, layer):
     result = a11.run('pid', 'approve', 'alpha-p1')
     assert result.returncode == (0 if layer == 'reviewer-only' else 3)
     if layer != 'reviewer-only':
-        assert 'Codex builds come in v1.1' in result.stderr
+        assert 'Codex builds are not in this release' in result.stderr
 
 
 @pytest.mark.ac('AC-99')
@@ -113,7 +113,7 @@ def test_ac99_row2_later_codex_overrides(a11, run):
         a11.set_package_config(models={'model': 'gpt-6.1-sol'})
         result = a11.run('wp', 'authorise', 'alpha-p1', '--package', 'WP-1', '--lane', 'pm1tl1')
     assert result.returncode == 3
-    assert 'Codex builds come in v1.1' in result.stderr
+    assert 'Codex builds are not in this release' in result.stderr
     if run == 'launch':
         a11.send(10)
         a11.tick()

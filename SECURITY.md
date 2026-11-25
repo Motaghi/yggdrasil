@@ -18,4 +18,4 @@ This version's guards are accident guards, not containment. Its threat model and
 
 ## Supported versions
 
-Only the latest commit on `main` is supported while Yggdrasil is in its early versions.
+The latest release and the latest commit on `main` are supported while Yggdrasil is in its early versions.

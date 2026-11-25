@@ -592,6 +592,7 @@ def test_a_start_that_loses_the_record_to_a_newer_check_stops_its_job(monkeypatc
         mergecheck.save_record("p1", {"id": "p1-newer", "state": "running"})  # a newer check claims meanwhile
         return Process()
     monkeypatch.setattr(mergecheck.subprocess, "Popen", popen)
+    monkeypatch.setattr(mergecheck.util, "process_start", lambda pid: "s:1.000001")  # v1.1: the job's identity
     monkeypatch.setattr(mergecheck, "_stop_job", lambda data: stopped.append(data["id"]))
     started = mergecheck._start("p1", "/repo", ("m" * 40, "i" * 40))
     assert mergecheck.record("p1")["id"] == "p1-newer"

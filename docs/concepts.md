@@ -28,13 +28,15 @@ Each programme also has one **programme reviewer** (for example `rv1`). It write
 
 A project with only one line of work can drop the team lead and run as project manager, user-side reviewer and workers. This "collapsed shape" happens only when you ask for it or accept the main session's suggestion. Four levels is the default.
 
+**How a user-side reviewer gets a ruling into the record.** A user-side reviewer cannot record a ruling itself. It raises a decision for you (`ygg decision raise --from pm1su1 ...`), you answer it with `ygg decide`, and you record the ruling with `ygg ruling record`. Linking an answered decision to a recorded ruling automatically is planned for v1.2.
+
 ## Programmes and projects
 
 A **programme** is one area of work with a home folder: for example `website-redesign` with its git repo, or `research` with a folder of documents. It has a domain and a work-product kind:
 
 - `git-repo`: the home is a git repo. Each team lead works in its own worktree on its own branch.
 - `shared-tree`: the home is a folder other sessions also use. Same worktree layout, and the home's own checkout is never touched.
-- `vault-docs`: the home is a folder of documents with no branches. Each line of work writes to a staging folder, and the project manager moves accepted work into place. This kind is a preview in v1.0: its work packages get no automatic per-package review.
+- `vault-docs`: the home is a folder of documents with no branches. Each line of work writes to a staging folder, and the project manager moves accepted work into place. This kind is a preview in v1.1: its work packages get no automatic per-package review.
 
 A programme without a declared kind cannot start any sessions.
 

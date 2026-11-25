@@ -29,7 +29,7 @@ def root() -> Path:
         return adapter.cache_root()
     from . import plugins
     if selected not in plugins.BUILTINS["trackers"]:
-        # A discovered plugin (ruling 64) that keeps records in the files-tracker format names its folder.
+        # A discovered plugin that keeps records in the files-tracker format names its folder.
         plugin = plugins.load("trackers", str(selected))
         locate = getattr(plugin, "root", None)
         if callable(locate):
@@ -281,7 +281,7 @@ def nodes_file(project: str | None = None, programme_name: str | None = None) ->
 
 NODE_ROLES = ("tl", "su", "worker", "reviewer")
 # A project's nodes file holds its team; reviewers belong to the programme's nodes file, parented to it.
-PROJECT_ROLES = ("tl", "su", "worker", "reviewer")  # a project reviewer (`<pm>rv1`, A11 amendment 23)
+PROJECT_ROLES = ("tl", "su", "worker", "reviewer")  # a project reviewer (`<pm>rv1`)
 PROGRAMME_ROLES = ("reviewer",)
 
 

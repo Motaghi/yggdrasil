@@ -41,27 +41,29 @@ SCHEMA = {
     "models": PROJECT, "codex_models": GLOBAL, "review_rounds": PROJECT, "delivery_approach": PROJECT, "agile_cadence": PROJECT,
     "cadence": PROJECT, "wip_limit": PROJECT, "timebox_hours": PROJECT, "merge_mode": PROJECT,
     "branch_protection": PROJECT, "work_ahead": PROJECT,
-    # A11 keys (AC-35, the lane-0 seam). Each lane reads these; only lane 0 adds keys here.
+    # A11 keys (AC-35). Each module reads these; new keys are added here only.
     "stage_close": PROJECT, "agent_env_passthrough": GLOBAL, "command_retry_limit": GLOBAL,
     "busy_max_minutes": GLOBAL, "needs_l1_minutes": GLOBAL, "merge_check_timeout_minutes": GLOBAL,
     "merge_check_path": GLOBAL, "merge_check_setup": PROJECT, "alert_t3_thread": GLOBAL, "alert_command": GLOBAL,
     "alert_send_timeout_seconds": GLOBAL, "alert_max_attempts": GLOBAL, "alert_tick_budget_seconds": GLOBAL,
     "dashboard_allowed_hosts": GLOBAL, "alert_macos": GLOBAL,
+    "dashboard_refresh_seconds": GLOBAL,  # v1.1: the dashboard page's refresh tag (the demo sets it)
 }
 # Keys inside a mapping key that `ygg config explain` answers for by their dotted name (AC-35).
 SUBKEYS = {"models.review_model"}
 # Signed defaults whose behaviour isn't built yet: `ygg config explain` shows the default, while `config.get`
 # keeps today's value until the default moves into data/yggdrasil.yaml. agent_claude_config_dir moved there
-# (lane 3, AC-75). agent_commands stays shown here: its rules come from the approved PID's header only
+# (AC-75). agent_commands stays shown here: its rules come from the approved PID's header only
 # (permissions.commands_for, AC-74), never from a config layer.
 DEFERRED_DEFAULTS = {"agent_commands": []}
 # Project keys honoured only from the approved PID snapshot (AC-35, AC-98): never from a programme or package.
 APPROVED_PID_KEYS = ("agent_commands", "merge_check_setup")
 # Positive whole-number keys (AC-35).
 POSITIVE_WHOLE_KEYS = ("command_retry_limit", "busy_max_minutes", "needs_l1_minutes", "merge_check_timeout_minutes",
-                       "alert_send_timeout_seconds", "alert_max_attempts", "alert_tick_budget_seconds")
+                       "alert_send_timeout_seconds", "alert_max_attempts", "alert_tick_budget_seconds",
+                       "dashboard_refresh_seconds")
 STAGE_CLOSE_VALUES = ("default", "auto", "pm-only")
-# Project keys that only the PID layer may set (Amendment A4: the approved snapshot or the user verb).
+# Project keys that only the PID layer may set (the approved snapshot or the user verb).
 PID_ONLY = {"work_ahead"}
 ENV_KEYS = {"tracker": "YGG_TRACKER", "state_root": "YGG_STATE_ROOT", "files_root": "YGG_FILES_ROOT",
             "plugin_paths": "YGG_PLUGIN_PATH"}
@@ -93,9 +95,56 @@ AGREEMENT_FILE = "agreements.yaml"
 def _load(path) -> dict:
     try:
         data = yaml.safe_load(Path(path).read_text())
-    except (OSError, yaml.YAMLError):
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+class BrokenFileError(util.YggError):
+    """A config or profile file that is not valid YAML, not valid text, or not a mapping. The message names the file
+    and, for a YAML error, its line; it never quotes the file."""
+
+    def __init__(self, path, problem: str):
+        super().__init__(util.EXIT_USAGE, str(path) + ": " + problem)
+        self.problem = problem
+
+
+def _broken(path, problem: str) -> dict:
+    raise BrokenFileError(path, problem)
+
+
+def _load_strict(path) -> dict:
+    """The user's own config file or the profile. A file that exists but is not valid YAML, not valid text, or not a
+    mapping is an error that names it; an empty file (or one holding only comments) is an empty config, and a file
+    that cannot be read is treated as missing. The message is a fixed category and a line number, never the
+    parser's text: that text can echo an alias or a tag taken from the file, which may be a secret."""
+    # Every refusal is raised outside the except blocks, so the parser's exception (whose text can echo the file) is
+    # never chained to it and no traceback can show it.
+    problem = None
+    try:
+        text = Path(path).read_text()
+    except OSError:
+        return {}
+    except UnicodeDecodeError:
+        problem = "not valid YAML"
+    if problem is not None:
+        return _broken(path, problem)
+    try:
+        data = yaml.safe_load(text)
+        empty = data is None and yaml.compose(text) is None
+    except yaml.YAMLError as error:
+        mark = getattr(error, "problem_mark", None)
+        problem = "not valid YAML" + (" at line " + str(mark.line + 1) if mark is not None else "")
+    if problem is not None:
+        return _broken(path, problem)
+    if empty:
+        return {}
+    if not isinstance(data, dict):
+        return _broken(path, "not a mapping")
+    return data
+
+
+_load_user = _load_strict
 
 
 NO_CONFIG = "none"
@@ -119,7 +168,7 @@ def untrusted_code_settings() -> list[str]:
     if user_config_trusted():
         return []
     path = user_config_path()
-    raw = _load(path) if path else {}
+    raw = _load_user(path) if path else {}
     problems = []
     if raw.get("plugin_paths"):
         problems.append(str(path) + ": plugin_paths " + TRUSTED_ONLY)
@@ -170,7 +219,7 @@ def profile() -> dict | None:
     path = util.env("YGG_PROFILE")
     if not path:
         return None
-    return _load(path)
+    return _load_strict(path)
 
 
 @lru_cache(maxsize=1)
@@ -178,7 +227,7 @@ def file_layers() -> tuple:
     """(label, values) pairs for the global file layers, lowest precedence first."""
     layers = [("core", _load(CORE))]
     user_path = user_config_path()
-    user = _resolve_paths(_load(user_path), user_path.parent) if user_path else {}
+    user = _resolve_paths(_load_user(user_path), user_path.parent) if user_path else {}
     if user_path and not user_config_trusted():
         # A current-folder config never contributes code: no plugin search paths, no plugin selection, and no
         # trusted-only key (validate refuses such a config; this keeps the value out for commands that skip it).

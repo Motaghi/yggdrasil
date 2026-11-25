@@ -1,0 +1,1 @@
+- tests/acceptance-v1-1/test_acceptance.py::test_ac23_empty_config_is_valid: AC-23 empty-config example expects exit 0, exactly the empty stub result.

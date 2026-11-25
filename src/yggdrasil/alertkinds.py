@@ -33,7 +33,7 @@ NEXT_STEPS = {
     "ygg-blocker": "Ask your main session what the team needs from you.",
     "ygg-protection-missing": "Protect main, or ask your main session to set branch protection to warn.",
     "ygg-tracker-corrupt": "Stop and ask your main session to repair the tracker.",
-    "ygg-cancel-interrupted": 'Tell your main session "finish the cancel".',  # A11.1 AC-13 (lane 2 asked)
+    "ygg-cancel-interrupted": 'Tell your main session "finish the cancel".',  # A11.1 AC-13
 }
 USER_KINDS = frozenset(NEXT_STEPS)
 UNCERTAIN_USER_AFTER_SECONDS = 300

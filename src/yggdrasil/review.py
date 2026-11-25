@@ -415,7 +415,7 @@ def _trusted_recheck(project: str, package: str, lane: str, base: str, head: str
         from . import lanecheck
     except ImportError:
         return
-    check = getattr(lanecheck, "recheck_package", None)  # lane 1 (AC-93 row 3); refuses with its own text
+    check = getattr(lanecheck, "recheck_package", None)  # (AC-93 row 3); refuses with its own text
     if check is None:
         return
     check(project, package)
@@ -524,7 +524,8 @@ def _assignment_text(node: dict, activation: str) -> str:
              "Write your verdict as JSON to $YGG_REVIEW_DIR/verdict.json (the file " +
              str(_review_dir(activation) / "verdict.json") + "), then exit: "
              '{"review": "' + review["id"] + '", "verdict": "approve"} or {"review": "' + review["id"] +
-             '", "verdict": "revise", "findings": [{"file": "...", "line": 1, "text": "..."}]}.']
+             '", "verdict": "revise", "findings": [{"file": "...", "line": 1, "text": "..."}]}.',
+             "The file holds only the JSON object: no other text and no code fence."]
     if criteria:
         lines += ["", "Acceptance criteria of " + review["package"] + " (verbatim data):", _fenced(criteria)]
     return "\n".join(lines)
@@ -615,7 +616,7 @@ def _settle(review_id: str, activation: dict) -> None:
                 activation.get("phase") == "aborted":
             _save("reviews", data)
             return  # the stamp stays owed: the capacity backoff or the stop decides the next launch
-        verdict = _read_verdict(activation) if code == 0 else None
+        verdict = _read_verdict(activation, review_id) if code == 0 else None
         if code not in (0, None) and activation.get("cli") == "codex" and not review.get("fallback"):
             # A failed Codex reviewer launch falls back to the builder's family once (AC-56 row 2).
             review["family"] = "fallback"
@@ -713,16 +714,84 @@ def _review_dir(activation: str) -> Path:
     return state.root() / "scratch" / activation
 
 
-def _read_verdict(activation: dict) -> dict | None:
-    path = _review_dir(str(activation.get("activation"))) / "verdict.json"
+_FENCED = re.compile(r"\A```[A-Za-z0-9_+-]*[ \t]*\r?\n(.*?)\r?\n?```\Z", re.DOTALL)
+
+
+def _read_bounded(folder: Path, name: str) -> str | None:
+    """The text of `<folder>/<name>`, read through a file descriptor opened without following a link: a symlinked
+    folder or file, a file that is not a regular file, one over VERDICT_LIMIT bytes and any I/O error while it is
+    inspected or read all give None. The descriptors are always closed, and no OSError escapes: the conductor's
+    loop would not catch it."""
+    import stat
+    flags = getattr(os, "O_NOFOLLOW", 0)
+    dir_fd = fd = None
     try:
-        if path.stat().st_size > VERDICT_LIMIT:
+        dir_fd = os.open(str(folder), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | flags)
+        # O_NONBLOCK: a named pipe with no writer would otherwise block the open; it is refused below.
+        fd = os.open(name, os.O_RDONLY | flags | os.O_NONBLOCK, dir_fd=dir_fd)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
             return None
-        data = json.loads(path.read_text())
-    except (OSError, ValueError):
+        raw = b""
+        while len(raw) <= VERDICT_LIMIT:
+            chunk = os.read(fd, VERDICT_LIMIT + 1 - len(raw))
+            if not chunk:
+                break
+            raw += chunk
+    except OSError:
         return None
-    if not isinstance(data, dict) or data.get("verdict") not in ("approve", "revise"):
+    finally:
+        for descriptor in (fd, dir_fd):
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+    if len(raw) > VERDICT_LIMIT:
         return None
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def _pinned_review_id(activation: dict) -> str | None:
+    """The id of the review pinned in an activation's own record. Three shapes exist: `review_target`, an object
+    with an `id`, which wins when present; `review` as the id itself; and `review` as the whole object, which
+    older records hold."""
+    target = activation.get("review_target")
+    if isinstance(target, dict) and isinstance(target.get("id"), str) and target["id"]:
+        return target["id"]
+    held = activation.get("review")
+    if isinstance(held, str) and held:
+        return held
+    if isinstance(held, dict) and isinstance(held.get("id"), str) and held["id"]:
+        return held["id"]
+    return None
+
+
+def _read_verdict(activation: dict, review_id: str | None = None) -> dict | None:
+    """The verdict a reviewer wrote. The prompt asks for only the JSON object, but a reviewer on Codex sometimes
+    wraps it, so this also reads one fenced block that is the whole file, a verdict word with stray case or
+    spaces, and a missing `review` key, which is taken only from the review pinned in the activation's own record
+    (each activation handles exactly one). A `review` naming another review is kept as written: the caller never
+    adopts it. A verdict file or scratch folder that is a link is never read."""
+    text = _read_bounded(_review_dir(str(activation.get("activation"))), "verdict.json")
+    if text is None:
+        return None
+    try:
+        fenced = _FENCED.match(text.strip())
+        data = json.loads(fenced.group(1) if fenced else text)
+    except ValueError:
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("verdict"), str):
+        return None
+    word = data["verdict"].strip().lower()
+    if word not in ("approve", "revise"):
+        return None
+    data["verdict"] = word
+    pinned = _pinned_review_id(activation)
+    if "review" not in data and pinned and (review_id is None or review_id == pinned):
+        data["review"] = pinned
     if not isinstance(data.get("review"), str):
         return None
     findings = data.get("findings")

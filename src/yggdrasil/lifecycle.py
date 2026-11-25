@@ -456,33 +456,63 @@ def revoke(activation: str, why: str) -> None:
 
 # ---------------------------------------------------------------- recovery
 
+def _left_pending(data: dict) -> bool:
+    """`confirm` deliberately left this start pending for the second confirm window, and said so in its own field."""
+    return bool(data.get("confirm_window_seconds") and data.get("outcome") == "pending"
+                and data.get("confirm_left_pending_at"))
+
+
+def _unspawned_verdict(found: list[dict], data: dict) -> str:
+    """What to do with an activation that has no `spawned` fact: `pending`, `unknown`, `unsettled` (held as
+    uncertain) or `abort` (revoke and abort it). Its launch call decides first. A start that `confirm` deliberately
+    left pending is then judged by its supervisor: alive or unknown evidence keeps it pending, so the conductor
+    holds it as uncertain at the end of the window and never aborts it, and only a dead supervisor lets recovery
+    abort and revoke it. Anything else is v1.0's rule: a launcher that is gone aborts its reservation."""
+    seen = launch_step(found, data)
+    if seen == "alive":
+        return "pending"
+    if seen == "unknown":
+        return "unknown"
+    if _left_pending(data) and unspawned_evidence(found, data) in ("alive", "unknown"):
+        return "pending"
+    if held_before_spawn(data, seen):
+        # Its confirm step already held it as uncertain (a start held past the confirm window): its supervisor
+        # may still start the agent, so it stays held for the user, never aborted and relaunched by a later tick
+        # (A11 AC-43 row 3, AC-22; I2: uncertain is held until settled).
+        return "unsettled"
+    return "abort"
+
+
 def settle(node_id: str, activation: str, data: dict, found: list[dict]) -> str:
     """Settle one non-terminal activation from its facts and the evidence. Returns what it found:
     `pending`, `running`, `aborted`, `unsettled` (to be held as uncertain), `unknown` or `exited`."""
     from . import launcher
     if phase_fields(found, "spawned").get("launcher") == "t3":
-        # A T3 session: T3's thread is the evidence (ruling 106); an ended run is committed by the per-node
+        # A T3 session: T3's thread is the evidence; an ended run is committed by the per-node
         # pass, a gone thread is held as uncertain (I2), anything unreadable is unknown.
         from . import t3
         seen = t3.evidence(node_id, activation)["state"]
         return {"alive": "running", "ended": "pending", "gone": "unsettled"}.get(seen, "unknown")
     if "spawned" not in {e.get("phase") for e in found}:
-        seen = launch_step(found, data)
-        if seen == "alive":
-            return "pending"
-        if seen == "unknown":
-            return "unknown"
-        if held_before_spawn(data, seen):
-            # Its confirm step already held it as uncertain (a start held past the confirm window): its supervisor
-            # may still start the agent, so it stays held for the user, never aborted and relaunched by a later tick
-            # (A11 AC-43 row 3, AC-22; I2: uncertain is held until settled).
-            return "unsettled"
-        with util.locked():
-            if terminal_of(facts(_programme(node_id), activation)) is None and \
-                    "spawned" not in {e.get("phase") for e in facts(_programme(node_id), activation)}:
-                revoke(activation, "launcher-exited")
-                launcher.abort_activation(node_id, activation, "launcher-exited")
-        return "aborted"
+        verdict = _unspawned_verdict(found, data)
+        if verdict == "abort":
+            with util.locked():
+                fresh_found = facts(_programme(node_id), activation)
+                if terminal_of(fresh_found) is None and "spawned" not in {e.get("phase") for e in fresh_found}:
+                    # Read the receipt again under the transition lock. Only a deliberate decision recorded after
+                    # the first read (`confirm` leaving the start pending, O-2) is judged again, so it is seen and
+                    # not overwritten by an abort. Otherwise this is v1.0's re-check exactly: terminal or spawned
+                    # facts only, then revoke and abort. That keeps the behaviour with the switch off identical.
+                    fresh = launcher.receipt(activation)
+                    if fresh.get("confirm_left_pending_at"):
+                        verdict = _unspawned_verdict(fresh_found, fresh)
+                    if verdict == "abort":
+                        revoke(activation, "launcher-exited")
+                        launcher.abort_activation(node_id, activation, "launcher-exited")
+                        return "aborted"
+                else:
+                    return "aborted"
+        return verdict
     # Spawned: an agent may exist.
     if data.get("exited_at") is not None:
         return "exited"  # the exit record settles it (classified by the receipt path)

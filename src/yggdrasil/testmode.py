@@ -9,7 +9,7 @@ from . import launcher, state, tracker, util
 
 def _guard() -> None:
     # A managed session (YGG_NODE, YGG_ACTIVATION or a managed worktree) may never run a fixture verb: they write
-    # judgements and state as the user (A7 I11, A11 amendment 25).
+    # judgements and state as the user (A7 I11).
     if not util.test_mode() or state.managed_session():
         raise util.refuse("test-mode: fixture commands need YGG_TEST_MODE=1 and no YGG_NODE")
 
@@ -111,7 +111,7 @@ def activation(args) -> str:
     return identifier + "\n"
 
 
-# ---------------------------------------------------------------- A11 test-mode verbs (amendment 25)
+# ---------------------------------------------------------------- A11 test-mode verbs
 
 def _field(value: str):
     """A `--name value` field of `ygg test alert`: true and false as booleans, whole numbers as numbers."""

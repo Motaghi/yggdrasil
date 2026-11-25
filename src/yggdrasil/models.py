@@ -66,14 +66,14 @@ def resolve_node(node: dict, package: str | None = None) -> dict:
     model, effort = merged.get("model"), merged.get("effort")
     pair_model, pair_effort = merged.get("pair_model"), merged.get("pair_effort")
     if node["role"] == "reviewer" and not node.get("project"):
-        # The programme reviewer (morning go) always runs on Claude with the core model (D1, amendment 27).
+        # The programme reviewer (morning go) always runs on Claude with the core model (D1).
         core = core_models()
         model, effort = core.get("model"), core.get("effort")
     elif node["role"] == "reviewer":
         model, effort = pair_model, pair_effort
     pools = (config.profile() or {}).get("pools") or {}
     if node["role"] == "l1":
-        # With a profile `pools` mapping, L1 uses its l1_* entries when set (ruling 18); everything the conductor
+        # With a profile `pools` mapping, L1 uses its l1_* entries when set; everything the conductor
         # starts uses the launched_* entries. Without one, no provider is named.
         main_pool_value = pools.get("l1_claude") or pools.get("launched_claude")
         pair_pool_value = pools.get("l1_codex") or pools.get("launched_codex")
@@ -86,8 +86,8 @@ def resolve_node(node: dict, package: str | None = None) -> dict:
             "pair_pool": pair_pool_value if pools else None, "source": source}
 
 
-# D1 (ruling 134; AC-99 rows 1 and 2): in v1.0 Codex runs only as the project reviewer.
-CODEX_REFUSAL = "Codex builds come in v1.1"
+# D1 (AC-99 rows 1 and 2): Codex runs only as the project reviewer in this release.
+CODEX_REFUSAL = "Codex builds are not in this release"
 BUILDER_ROLES = ("pm", "tl", "worker", "su")
 
 

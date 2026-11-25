@@ -28,6 +28,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
@@ -186,7 +187,7 @@ def refuse_repo_count(project_id: str, header: dict) -> None:
         return
     repos = [entry for entry in (header.get("repos") or []) if isinstance(entry, dict)]
     if len(repos) > 1:
-        raise util.refuse("projects with more than one repo come in v1.1")
+        raise util.refuse("projects with more than one repo are not in this release")
     if not repos:
         raise util.refuse("a git project needs one repo")
 
@@ -324,6 +325,8 @@ def run_check(project_id: str, repo: str, main_sha: str, integration_sha: str) -
 def job_main(argv: list[str]) -> int:
     """The background job: `python -m yggdrasil.mergecheck <project> <repo> <main> <integration> <id>`."""
     project_id, repo, main_sha, integration_sha, check_id = argv[:5]
+    if not _named_by_record(project_id, check_id):
+        return 0  # v1.1: no record names this job (its start lost the claim): it does nothing, leaves no result
     try:
         outcome = run_check(project_id, repo, main_sha, integration_sha)
     except YggError as error:
@@ -337,6 +340,24 @@ def job_main(argv: list[str]) -> int:
     return 0
 
 
+JOB_RECORD_SECONDS = 30
+
+
+def _named_by_record(project_id: str, check_id: str) -> bool:
+    """v1.1: a job works only once its record names it (pid and all); a claim that is still `starting` is
+    waited for, a bounded time."""
+    deadline = time.monotonic() + JOB_RECORD_SECONDS
+    while True:
+        data = record(project_id)
+        if data.get("id") != check_id or data.get("state") not in ("starting", "running"):
+            return False
+        if data.get("pid") == os.getpid():
+            return True
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(0.1)
+
+
 def _start(project_id: str, repo: str, current: tuple[str, str], seen: dict | None = None) -> dict | None:
     """Start a background check, claiming the record only while it is still what the caller saw (owner and
     revision); otherwise skip (another writer moved it) and log."""
@@ -346,14 +367,25 @@ def _start(project_id: str, repo: str, current: tuple[str, str], seen: dict | No
     if not save_if_owner(project_id, seen.get("id"), claim, revision=int(seen.get("revision") or 0)):
         return None
     util.ensure_dir(folder())
-    with open(folder() / (check_id + ".log"), "ab") as log:
-        process = subprocess.Popen([sys.executable, "-m", "yggdrasil.mergecheck", project_id, repo, current[0],
-                                    current[1], check_id], stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                                   start_new_session=True, env=dict(os.environ))
-    data = {"id": check_id, "project": project_id, "repo": repo, "main": current[0], "integration": current[1],
-            "state": "running", "pid": process.pid, "started_at": util.iso()}
-    if not save_if_owner(project_id, check_id, data, revision=claim.get("revision")):
-        _stop_job(data)  # a newer check took the record while this one started: this job's result is moot
+    # v1.1: the job starts under the record lock, only while the claim is still this check's, and its pid and
+    # start identity are published in the same locked write right after Popen returns, so no job runs without a
+    # record naming it (the job itself waits to be named, _named_by_record).
+    with util.locked(RECORD_LOCK):
+        owner = record(project_id)
+        if owner.get("id") != check_id or int(owner.get("revision") or 0) != int(claim.get("revision") or 0):
+            return None
+        with open(folder() / (check_id + ".log"), "ab") as log:
+            process = subprocess.Popen([sys.executable, "-m", "yggdrasil.mergecheck", project_id, repo,
+                                        current[0], current[1], check_id], stdin=subprocess.DEVNULL, stdout=log,
+                                       stderr=log, start_new_session=True, env=dict(os.environ))
+        # The job's start identity, read while it is still this process's unreaped child (its pid can't be
+        # reused).
+        data = {"id": check_id, "project": project_id, "repo": repo, "main": current[0],
+                "integration": current[1], "state": "running", "pid": process.pid,
+                "process_started_at": util.process_start(process.pid), "started_at": util.iso()}
+        if not save_if_owner(project_id, check_id, data, revision=claim.get("revision")):
+            _stop_job(data)  # a newer check took the record while this one started: this job's result is moot
+            _tidy(check_id)
     return data
 
 
@@ -380,6 +412,7 @@ def _finish(project: dict, data: dict, outcome: dict) -> None:
     data.update(state=outcome.get("state", "failed"), reason=outcome.get("reason", ""),
                 finished_at=outcome.get("finished_at") or util.iso())
     data.pop("pid", None)
+    data.pop("process_started_at", None)
     if data["state"] != "passed":
         data.update(effects_pending=True, tail=outcome.get("tail") or "")
     owner = save_if_owner(project_id, data.get("id"), data, revision=data.get("revision"))
@@ -492,7 +525,7 @@ def _close(project_id: str) -> None:
         if project.get("state") not in ("ready-to-merge", "executing"):
             return
         # Read again under the journal lock wp_reopen takes: a package reopened after the merge into main, or a
-        # stage no longer approved, keeps the project open, so its work stays schedulable (A11 amendments 13, 22).
+        # stage no longer approved, keeps the project open, so its work stays schedulable.
         if not packages_merged(project_id) or not last_stage_approved(project_id):
             return
         project["state"] = "closed"
@@ -552,6 +585,7 @@ def _project_step(project: dict) -> None:
             _stop_job(data)
             cancelled = dict(data, state="cancelled", finished_at=util.iso())
             cancelled.pop("pid", None)
+            cancelled.pop("process_started_at", None)
             save_if_owner(project_id, data.get("id"), cancelled, revision=data.get("revision"))
         if project.get("state") == "ready-to-merge":
             _back_to_executing(project_id)
@@ -669,7 +703,7 @@ def _refuse_interrupted_cancel(project_id: str, lane: str) -> None:
     Lane 2's `cancel.check_lane` decides and refuses; before it is merged in, lane 1's `lanedrop.interrupted`."""
     import importlib
     try:
-        cancel = importlib.import_module("yggdrasil.cancel")  # lane 2's cancel.check_lane raises the refusal
+        cancel = importlib.import_module("yggdrasil.cancel")  # cancel.check_lane raises the refusal
     except ImportError:
         cancel = None
     if cancel is not None and hasattr(cancel, "check_lane"):
@@ -741,7 +775,8 @@ def check_verb(project_id: str, repo: str | None) -> str:
     rehydrate.replay_journal()  # journal recovery before any failure effects are replayed
     check_id = project_id + "-" + uuid.uuid4().hex[:10]
     data = {"id": check_id, "project": project_id, "repo": path, "main": current[0], "integration": current[1],
-            "state": "running", "pid": os.getpid(), "started_at": util.iso()}
+            "state": "running", "pid": os.getpid(), "process_started_at": util.process_start(os.getpid()),
+            "started_at": util.iso()}
     with util.locked(RECORD_LOCK):
         existing = record(project_id)
         if existing.get("effects_pending"):
@@ -773,7 +808,7 @@ def merge_main(project_id: str, repo: str | None, print_only: bool = False) -> s
     if print_only:
         _passed_pair(project_id, path, repo)
         from .gitops import merge_mode
-        # Today's prepare-mode output, unchanged (amendment 14), so the pull-request route reads as before.
+        # Today's prepare-mode output, unchanged, so the pull-request route reads as before.
         return ("Merge mode " + merge_mode(project_id) + ": main is unchanged. Open a pull request from " +
                 integration + " to main, or run:\n  " +
                 shlex.join(["git", "-C", str(path), "merge", "--no-ff", integration]) + "\n")

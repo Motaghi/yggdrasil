@@ -64,7 +64,7 @@ def receipt(activation: str) -> dict:
 # of the record never clears them (the supervisor records identity under the creation lock, others under
 # the journal lock; the receipt lock serialises the file itself).
 WRITE_ONCE = ("pid", "process_started_at", "exited_at", "exit_code", "terminal", "supervisor_pid",
-              "supervisor_started_at", "launch_returned_at")
+              "supervisor_started_at", "launch_returned_at", "confirm_left_pending_at")
 
 
 def _scope_for(data: dict) -> dict:
@@ -255,7 +255,7 @@ def ensure_worktree(home: str, path: Path, branch: str, base: str) -> Path:
 
 
 try:
-    from . import lanedrop  # lane 1's (A11.1 AC-06); the integration branch brings it in
+    from . import lanedrop  # (A11.1 AC-06); the integration branch brings it in
 except ImportError:
     lanedrop = None
 
@@ -306,11 +306,11 @@ def work_area(node: dict, nodes: dict) -> Path:
     return working_directory(node, nodes, create=False)
 
 
-# EXTENSION POINT (lane 3 owns; lane 2 fills): the review a project reviewer's launch is for. A "module:function"
+# EXTENSION POINT (the launcher owns it, the review module fills it): the review a project reviewer's launch is for. A "module:function"
 # reference to function(node, work) -> dict | None, where `work` is the work set the launch reserves and the dict
-# has `id` (rv-0001), `package`, `project`, `base` and `head` (commit SHAs). Lane 2 hands a reviewer one review per
+# has `id` (rv-0001), `package`, `project`, `base` and `head` (commit SHAs). The review module hands a reviewer one review per
 # activation (AC-94 row 3). None means no package review (the programme reviewer, the morning go).
-REVIEW_SOURCE = "review:review_source"  # lane 2
+REVIEW_SOURCE = "review:review_source"
 DIFF_LIMIT = 100000
 DIFF_CUT = "(diff cut at 100000 characters; the full change is in the checkout)"
 
@@ -639,7 +639,7 @@ exit 0
 """
 
 
-# EXTENSION POINT (lane 3 owns; A11 seam): the hook events every Claude launch registers and the `ygg hook`
+# EXTENSION POINT (the launcher owns it; A11 seam): the hook events every Claude launch registers and the `ygg hook`
 # action each runs (test conventions, "Post events"; AC-20 row 3). The T3 launcher uses the same table.
 HOOK_EVENTS = (("PreToolUse", "pretool"), ("PostToolUse", "posttool"), ("PostToolUseFailure", "posttool"))
 
@@ -703,7 +703,7 @@ def worktree_settings(hooks: str, home: str | None) -> list[tuple[str, str]]:
 
 
 EFFORTS = ("low", "medium", "high", "xhigh")
-REVIEWER_CHOICE = "review:reviewer_choice"  # lane 2 fills: function(node) -> (model, effort, cli) or None
+REVIEWER_CHOICE = "review:reviewer_choice"  # filled by the review module: function(node) -> (model, effort, cli) or None
 
 
 def _reviewer_choice(node: dict):
@@ -717,7 +717,7 @@ def model_for(node: dict) -> tuple[str, str, str]:
     from . import models, review
     resolved = models.resolve(node["id"])
     model, effort = str(resolved["model"]), str(resolved["effort"])
-    chosen = _reviewer_choice(node)  # lane 2's: the project reviewer's model family (AC-12 row 3, AC-56)
+    chosen = _reviewer_choice(node)  # the project reviewer's model family (AC-12 row 3, AC-56)
     if chosen is not None:
         model, effort = str(chosen[0]), str(chosen[1])
     if effort not in EFFORTS:
@@ -788,7 +788,8 @@ def brief_context(node: dict) -> str:
         return ""
     if node.get("role") == "tl" and node.get("project"):
         if tracker.read_document(node["project"], "brief"):
-            return ("When you start your Sol pair reviewer, pass it the project brief verbatim: " +
+            return ("When you start your pair reviewer (the agent you start on the configured pair model to check "
+                    "your work), pass it the project brief verbatim: " +
                     str(tracker.document_path(node["project"], "brief")) + ".")
         return ""
     if node.get("role") not in ("su", "reviewer") and not _sol_worker(node):
@@ -851,18 +852,19 @@ PROMPT_SECTIONS = (
     ("role", _role_section),
     ("who_is_who", _who_is_who_section),
     ("brief", _brief_section),
-    ("rulings", "review:rulings_section"),  # lane 2: `## User rulings` (AC-29, AC-89, AC-90)
-    ("review", "launcher:review_section"),  # lane 3: the reviewer's checkout and diff (AC-95)
-    ("commit_path", "launcher:commit_path_section"),  # lane 3: the commit-path and precedence sentences
+    ("rulings", "review:rulings_section"),  # `## User rulings` (AC-29, AC-89, AC-90)
+    ("review", "launcher:review_section"),  # the reviewer's checkout and diff (AC-95)
+    ("commit_path", "launcher:commit_path_section"),  # the commit-path and precedence sentences
                                                        # (AC-17, AC-75)
-    ("role_guidance", None),  # lane 3: role sentences such as the PM's for finding 15 (AC-38) are in data/roles
+    ("role_guidance", None),  # role sentences such as the PM's for finding 15 (AC-38) are in data/roles
 )
 
 
 def review_section(node: dict, activation: str, context: dict) -> str:
     """For a reviewer launched for a package review: the review, its checkout of the reviewed head, where the
     verdict goes, and the diff from base to head, cut at 100,000 characters (AC-95 row 3)."""
-    review = receipt(activation).get("review")
+    found = receipt(activation)
+    review = found.get("review_target") or found.get("review")  # a receipt from before v1.1 holds the dict
     if node.get("role") != "reviewer" or not isinstance(review, dict):
         return ""
     checkout = receipt(activation).get("cwd") or ""
@@ -944,8 +946,9 @@ def mark_uncertain(node_id: str, activation: str, why: str, *, allow_confirmed: 
     as truth: status derives uncertainty from the lifecycle facts and fresh evidence.
 
     Only a pending (or receipt-less) activation becomes uncertain, or with `allow_confirmed` a confirmed one
-    whose process is gone without an exit record; an aborted one is left alone, and an activation already
-    held is not journalled or alerted twice. Returns whether it was newly held.
+    whose process is gone without an exit record; an aborted one is left alone, one whose valid exit record is
+    on file by the time the lock is held is left to that record, and an activation already held is not
+    journalled or alerted twice. Returns whether it was newly held.
     """
     with util.locked():
         data = receipt(activation)
@@ -959,6 +962,10 @@ def mark_uncertain(node_id: str, activation: str, why: str, *, allow_confirmed: 
             return False
         refused = ("aborted",) if allow_confirmed else ("confirmed", "aborted")
         if data.get("outcome") in refused:
+            return False
+        if start_evidence(data) in EXIT_VERDICTS:
+            # A valid exit record landed after the caller read the receipt: it decides, nothing is held or
+            # alerted. A record that can't be read is no reason to skip the hold.
             return False
         data["outcome"] = "uncertain"
         data["uncertain_reason"] = why
@@ -1009,15 +1016,15 @@ def hold_reason(node: dict, activation: str) -> str | None:
 
 REQUEUE_NOT = ("stopped", "superseded", "aborted")
 
-# EXTENSION POINTS (lane 3 owns; lane 2 fills; A11.1 AC-13). Each slot is a "module:function" reference.
+# EXTENSION POINTS (the launcher owns them, other modules fill them; A11.1 AC-13). Each slot is a "module:function" reference.
 # RESERVE_CHECKS: function(node) -> refusal text or None, run under the launch lock before anything is reserved,
 # for example "a cancel on this lane was interrupted; ask your main session to finish it" (the launch exits 3).
 # START_CHECKS: function(node, activation) -> reason or None, the last check before the agent starts (the
 # supervisor's final admission check, and the launcher's check right after preparation). A reason that starts with
 # "cancelled" aborts the start without putting the work back in the queue whole: the slot's owner settles the owed
 # items item by item, so the next tick doesn't reserve and abort again.
-RESERVE_CHECKS = (("cancel", "cancel:reserve_check"),)  # lane 2: an interrupted cancel on the node's lane
-START_CHECKS = (("cancel", "cancel:start_check"),)  # lane 2: a work-set package cancelled after this reservation, or a cancel
+RESERVE_CHECKS = (("cancel", "cancel:reserve_check"),)  # an interrupted cancel on the node's lane
+START_CHECKS = (("cancel", "cancel:start_check"),)  # a work-set package cancelled after this reservation, or a cancel
                                       # in progress on its lane recorded after it
 
 
@@ -1117,7 +1124,7 @@ def launch(node_id: str, *, reason: str = "launch", retries_used: int = 0, expli
     model, effort, cli = model_for(node)
     require_kind(node)  # a programme that can never launch says so, whatever the agreement (frozen A1 AC-65)
     from . import permissions, t3
-    # The user's agreement, before anything is reserved and whichever route the launch takes (rulings 129, 134):
+    # The user's agreement, before anything is reserved and whichever route the launch takes:
     # a T3 session gets the same agreed rules, in the settings file T3 loads.
     try:
         permissions.check(cli, node)
@@ -1234,7 +1241,7 @@ def launch(node_id: str, *, reason: str = "launch", retries_used: int = 0, expli
             purpose = {"packages": screened.packages, "blocked": screened.blocked}
         elif not purpose and node.get("project"):
             # Every other role: the packages its work set is about, in the journal fact itself, so a retry of it
-            # carries them and a cancel settles it (A11.1 AC-06); cancelled ones are left out (lane 2's cancel).
+            # carries them and a cancel settles it (A11.1 AC-06); cancelled ones are left out (the cancel module's).
             from . import cancel
             derived = cancel.work_packages(node, given, work, testing_package)
             if derived:
@@ -1250,8 +1257,11 @@ def launch(node_id: str, *, reason: str = "launch", retries_used: int = 0, expli
             "pid": None, "process_started_at": None, "reserved_at": util.iso(), "started_at": util.iso(),
             "outcome": "pending", "retries_used": retries_used, "reason": reason, "model": model,
             "effort": effort, "cli": cli, "programme": node.get("programme"), "project": node.get("project"),
-            "role": node["role"], "pinned": pinned, "agent_tz": agent_tz(), "review": review,
+            # `review` names the review (v1.1 AC-03 reads its id); `review_target` keeps the reviewed range.
+            "role": node["role"], "pinned": pinned, "agent_tz": agent_tz(),
+            "review": review.get("id") if isinstance(review, dict) else review, "review_target": review,
             "testing_package": testing_package,
+            **second_confirm_window(),
             **workahead.launch_fields(node, screened.ahead),
         })
         previous = dict(current)
@@ -1279,7 +1289,7 @@ def launch(node_id: str, *, reason: str = "launch", retries_used: int = 0, expli
         route, t3_project = None, None
         if use_t3:
             # A5.1: the lane worktree is its own T3 project with the guard hook in its settings file; the
-            # route (a new thread, or the node's thread) is read before the gate (ruling 107).
+            # route (a new thread, or the node's thread) is read before the gate.
             t3.prepare_worktree(cwd, node, activation, pinned, home=tracker.programme_home(programme), permissions=grant)
             t3_project = t3.ensure_project(cwd, str(node.get("project") or node.get("programme") or "") + "/" + node_id,
                                            node)
@@ -1427,25 +1437,82 @@ def receipt_outcome(data: dict) -> str:
     return "confirmed" if _alive(data) else "uncertain"
 
 
-def hold_uncertain(node_id: str, activation: str, why: str) -> str:
+EXIT_VERDICTS = ("confirmed", "failed", "capacity", "aborted")
+UNIDENTIFIED = "the agent's process was seen but its identity could not be read; held until it exits"
+
+
+def _valid_exit_record(data: dict) -> bool:
+    """An exit record that can be read: `exited_at` is a time, and `exit_code` is a whole number (never a
+    bool), or the record is one of the explicit ends written without a code (an abort, a release, a reset)."""
+    try:
+        util.parse_time(str(data.get("exited_at")))
+    except (TypeError, ValueError):
+        return False
+    code = data.get("exit_code")
+    if isinstance(code, int) and not isinstance(code, bool):
+        return True
+    if code is not None:
+        return False
+    if data.get("phase") == "aborted" or data.get("released_as") in ("failed", "aborted"):
+        return True
+    try:
+        util.parse_time(str(data.get("reset_at")))
+    except (TypeError, ValueError):
+        return False
+    return data.get("reset_at") is not None
+
+
+def start_evidence(data: dict, *, seen_dead: bool = False) -> str:
+    """What a receipt proves about a start, for the confirm and hold decisions only. A start is confirmed only
+    by a valid exit record, or by a live process whose recorded start identity matches; a live pid without a
+    recorded identity proves nothing. Once the agent has been seen gone (`seen_dead`) only an exit record counts.
+
+    Returns an exit record's verdict (`confirmed`, `failed`, `capacity`, `aborted`), `malformed` for an exit
+    record that can't be read (never a success), `alive` for a live process with its recorded identity, `dead`
+    for a recorded process that is gone or whose pid now belongs to another process, or `unknown` (no pid yet,
+    no recorded identity, or nothing more to go on after a death). `_alive` is left as it is for its other
+    callers, which must still treat a pid of unknown identity as possibly alive."""
+    if data.get("exited_at") is not None:
+        if not _valid_exit_record(data):
+            return "malformed"
+        if data.get("phase") == "aborted" or data.get("released_as") == "aborted":
+            return "aborted"
+        if data.get("class") == "capacity":
+            return "capacity"
+        return "confirmed" if data.get("exit_code") == 0 else "failed"
+    pid = data.get("pid")
+    if pid is None:
+        return "unknown"
+    if seen_dead:
+        return "dead"
+    if not util.pid_alive(pid):
+        return "dead"
+    started = data.get("process_start_identity") or data.get("process_started_at")
+    if not started:
+        return "unknown"  # a live pid of unknown identity may be another process: not proof
+    return "alive" if util.same_start(pid, started) else "dead"
+
+
+def hold_uncertain(node_id: str, activation: str, why: str, *, seen_dead: bool = False) -> str:
     """The one uncertain-outcome path: receipt, runtime and journal entry marked together, one alert.
     Every branch that reports `uncertain` comes through here.
 
     Under the transition lock it re-reads the receipt first and never overwrites a terminal record: an
-    aborted activation reports `aborted`, and a confirmed one with an exit record or a live process reports
-    that outcome. Only a pending receipt, or a confirmed one whose process is gone without an exit record,
-    becomes uncertain. The return value is always what the receipt says afterwards.
+    aborted activation reports `aborted`, and a confirmed one reports its outcome only when `start_evidence`
+    proves it (a valid exit record, or a live process with its recorded identity). Anything else is held: a
+    pending receipt, a confirmed one whose process is gone or can't be identified, and any receipt whose exit
+    record can't be read. A caller that has seen the agent's process gone passes `seen_dead`: from then on
+    only an exit record proves anything. The return value is always what the receipt says afterwards.
     """
     with util.locked():
         data = receipt(activation)
         if data.get("outcome") == "aborted" or data.get("phase") == "aborted":
             return "aborted"
-        if data.get("outcome") == "confirmed":
-            recorded = receipt_outcome(data)
-            if recorded != "uncertain":
-                return recorded
-        elif data.get("outcome") == "pending" and data.get("exited_at") is not None:
-            return "pending"  # an exit record arrived: the caller classifies it, nothing is held
+        evidence = start_evidence(data, seen_dead=seen_dead)
+        if data.get("outcome") == "confirmed" and evidence in ("confirmed", "failed", "capacity", "alive"):
+            return "confirmed" if evidence == "alive" else evidence
+        if data.get("outcome") == "pending" and evidence in EXIT_VERDICTS:
+            return "pending"  # a valid exit record arrived: the caller classifies it, nothing is held
         mark_uncertain(node_id, activation, why, allow_confirmed=True)
         return str(receipt(activation).get("outcome") or "uncertain")
 
@@ -1545,6 +1612,9 @@ def finalize(node_id: str, activation: str, outcome: str, *, resolving=("pending
                     return hold_uncertain(node_id, activation, "the process is gone and no exit was recorded")
                 return result
             return str(recorded)
+        if start_evidence(data) == "malformed":
+            # An exit record that can't be read proves nothing: held, never turned into a failure and a retry.
+            return hold_uncertain(node_id, activation, "the exit record can't be read")
         fresh = classify(data)
         if fresh is not None and fresh != "aborted" and (data.get("exited_at") is not None or outcome == "failed"):
             outcome = fresh  # the receipt as it is now, under the lock: a recorded exit keeps its class
@@ -1563,6 +1633,18 @@ def finalize(node_id: str, activation: str, outcome: str, *, resolving=("pending
     return outcome
 
 
+def second_confirm_window() -> dict:
+    """The second confirm window, recorded in the receipt at reservation (A11 AC-22, AC-77; switch
+    `confirm_window`): it ends `60 x max(1, L)` seconds after reservation, at most 300 s, where L is the host
+    load per CPU at that moment. Switched off, nothing is recorded and only the fixed first window applies."""
+    from . import conductor, release
+    if not release.on("confirm_window"):
+        return {}
+    value, _ = conductor.load_sample()
+    scale = max(1.0, value) if value is not None else 1.0
+    return {"confirm_window_seconds": min(300.0, 60.0 * scale)}
+
+
 def confirm(node_id: str, activation: str, supervisor=None) -> dict:
     deadline = time.monotonic() + float(config.get("launch_confirm_seconds", 5))
     grace = deadline + 10.0
@@ -1577,35 +1659,121 @@ def confirm(node_id: str, activation: str, supervisor=None) -> dict:
                 break
         time.sleep(0.05)
     data = receipt(activation)
-    if data.get("pid") is not None and data.get("exited_at") is None and not _alive(data) and \
-            supervisor is not None:
+    until = None  # set once, when the agent is first seen gone: every wait for its exit record shares it
+    seen_dead = start_evidence(data) == "dead"  # recorded whether or not there is a supervisor
+    if seen_dead and supervisor is not None:
         # The process is gone but its supervisor has not recorded the exit yet: wait for that record, so a
         # success or capacity exit is classified from it rather than as a failure.
-        limit = time.monotonic() + max(10.0, float(config.get("launch_confirm_seconds", 5)))
-        while time.monotonic() < limit and receipt(activation).get("exited_at") is None and supervisor.poll() is None:
-            time.sleep(0.05)
-        data = receipt(activation)
-    # Decide under the transition lock, from the receipt as it is now: a concurrent resolution (an exit
-    # record, reconciliation or an abort) is reported as recorded, never overwritten.
-    with util.locked():
-        data = receipt(activation)
-        if data.get("outcome") == "aborted" or data.get("phase") == "aborted":
-            return {"node": node_id, "activation": activation, "outcome": "aborted"}
-        if data.get("outcome") == "confirmed":
-            recorded = receipt_outcome(data)
-            if recorded == "uncertain":
-                recorded = hold_uncertain(node_id, activation, "the process is gone and no exit was recorded")
-            return {"node": node_id, "activation": activation, "outcome": recorded}
-        if data.get("outcome") == "uncertain":
-            return {"node": node_id, "activation": activation,
-                    "outcome": hold_uncertain(node_id, activation, "no process reported within the confirm window")}
-        outcome = classify(data)
-        if outcome == "failed" and data.get("exited_at") is None:
-            outcome = None  # no exit record yet: success, capacity or failure cannot be told
-        if outcome is None:
-            return {"node": node_id, "activation": activation,
-                    "outcome": hold_uncertain(node_id, activation, "no process reported within the confirm window")}
-        outcome = finalize(node_id, activation, outcome)
+        until = _exit_record_deadline()
+        _wait_for_exit_record(activation, supervisor, until)
+    for look in (1, 2):
+        # Decide under the transition lock, from the receipt as it is now: a concurrent resolution (an exit
+        # record, reconciliation or an abort) is reported as recorded, never overwritten.
+        with util.locked():
+            decided = _confirm_decision(node_id, activation, supervisor, look, seen_dead or look == 2)
+        if decided is not None:
+            return decided
+        # The agent exited while this step waited for the lock, and its supervisor, still running, writes the
+        # exit record under that lock: wait for the record outside the lock, then look once more.
+        until = until if until is not None else _exit_record_deadline()
+        _wait_for_exit_record(activation, supervisor, until)
+    raise AssertionError("unreachable: the second look always decides")
+
+
+def _exit_record_deadline() -> float:
+    """The end of the one grace confirm gives an agent's exit record, counted from when the agent is first seen
+    gone: max(10 s, launch_confirm_seconds) in total, however many waits share it."""
+    return time.monotonic() + max(10.0, float(config.get("launch_confirm_seconds", 5)))
+
+
+def _wait_for_exit_record(activation: str, supervisor, until: float) -> None:
+    """Wait until `until` (the shared deadline) for the supervisor to record the agent's exit; stop at once when
+    the record is there or the supervisor has ended without writing it."""
+    while time.monotonic() < until and receipt(activation).get("exited_at") is None and supervisor.poll() is None:
+        time.sleep(0.05)
+
+
+def _exit_record_may_come(data: dict, supervisor) -> bool:
+    """Whether an agent that is gone without an exit record may still get one: its supervisor, which writes the
+    record under the transition lock, is still running. Only with the confirm window off; with it on, nothing
+    here changes."""
+    return not data.get("confirm_window_seconds") and data.get("pid") is not None and \
+        data.get("exited_at") is None and supervisor is not None and supervisor.poll() is None
+
+
+def _confirm_decision_window_on(node_id: str, activation: str, data: dict, supervisor) -> dict:
+    """With the confirm window on, the decision exactly as before this change (A11 AC-22, the O-2 path): the
+    conductor judges a start left pending by its recorded second window. Only the hold decisions it calls
+    follow the stricter evidence rule."""
+    if data.get("outcome") == "confirmed":
+        recorded = receipt_outcome(data)
+        if recorded == "uncertain":
+            recorded = hold_uncertain(node_id, activation, "the process is gone and no exit was recorded")
+        return {"node": node_id, "activation": activation, "outcome": recorded}
+    if data.get("outcome") == "uncertain":
+        return {"node": node_id, "activation": activation,
+                "outcome": hold_uncertain(node_id, activation, "no process reported within the confirm window")}
+    outcome = classify(data)
+    if outcome == "failed" and data.get("exited_at") is None:
+        outcome = None  # no exit record yet: success, capacity or failure cannot be told
+    if outcome is None and supervisor is not None and supervisor.poll() is None:
+        # Its supervisor is still starting the agent: the conductor judges the recorded second window
+        # (A11 AC-22), so a slow start is not held here. A supervisor that has already exited without
+        # reporting is held at once: its gate write may or may not have landed, so it is not a proven failure to
+        # abort (`test_held_release`, `test_linear_gate_conflict`). The decision is recorded here, under the
+        # transition lock, in a field of its own: recovery treats a start as deliberately pending only when this
+        # field is set, never because the launch step merely returned (a confirm step that raised, or was
+        # interrupted, also ends in `launch_returned`, and that start is aborted).
+        update_receipt(activation, confirm_left_pending_at=util.iso())
+        return {"node": node_id, "activation": activation, "outcome": "pending"}
+    if outcome is None:
+        return {"node": node_id, "activation": activation,
+                "outcome": hold_uncertain(node_id, activation, "no process reported within the confirm window")}
+    outcome = finalize(node_id, activation, outcome)
+    return {"node": node_id, "activation": activation, "outcome": outcome}
+
+
+def _confirm_decision(node_id: str, activation: str, supervisor, look: int, seen_dead: bool) -> dict | None:
+    """The confirm step's decision, made under the transition lock, from `start_evidence`: a start is confirmed
+    only by a valid exit record or by a live process with its recorded identity. None (first look only) when the
+    agent's process is gone, its exit is not recorded yet and its supervisor is still running to record it: the
+    caller waits for that record outside the lock and looks again. Once the agent has been seen gone
+    (`seen_dead`: before the lock, or on the first look) only an exit record decides. Without proof the start
+    is held as uncertain, never reported as a success and never relaunched; an exit record that can't be read
+    is held too."""
+    data = receipt(activation)
+    if data.get("outcome") == "aborted" or data.get("phase") == "aborted":
+        return {"node": node_id, "activation": activation, "outcome": "aborted"}
+    if data.get("confirm_window_seconds"):
+        return _confirm_decision_window_on(node_id, activation, data, supervisor)
+    evidence = start_evidence(data, seen_dead=seen_dead)
+
+    def held(why: str) -> dict:
+        # A death seen here or earlier is passed on: the hold path never probes its way back to a success.
+        return {"node": node_id, "activation": activation,
+                "outcome": hold_uncertain(node_id, activation, why, seen_dead=seen_dead or evidence == "dead")}
+    if data.get("outcome") == "confirmed":
+        if evidence in ("confirmed", "failed", "capacity"):
+            return {"node": node_id, "activation": activation, "outcome": evidence}
+        if evidence == "alive":
+            return {"node": node_id, "activation": activation, "outcome": "confirmed"}
+        if evidence == "dead" and not seen_dead and _exit_record_may_come(data, supervisor):
+            return None  # its exit record may still come: the caller waits for it outside the lock
+        if evidence == "unknown" and data.get("pid") is not None:
+            return held(UNIDENTIFIED)
+        return held("the process is gone and no exit was recorded")
+    if data.get("outcome") == "uncertain":
+        return held("no process reported within the confirm window")
+    if evidence == "malformed":
+        return held("the exit record can't be read")
+    outcome = classify(data) if evidence in EXIT_VERDICTS else "confirmed" if evidence == "alive" else None
+    if outcome is None and evidence == "dead" and not seen_dead and _exit_record_may_come(data, supervisor):
+        return None  # its exit record may still come: the caller waits for it outside the lock
+    if outcome is None and evidence == "unknown" and data.get("pid") is not None:
+        return held(UNIDENTIFIED)
+    if outcome is None:
+        return held("no process reported within the confirm window")
+    outcome = finalize(node_id, activation, outcome)
     return {"node": node_id, "activation": activation, "outcome": outcome}
 
 
@@ -1794,7 +1962,7 @@ def claude_command(data: dict, environment: dict) -> tuple[list[str], dict]:
     and the agreed rules) applies either way. Checked against Claude Code 2.1.322."""
     argv = [util.env("YGG_CLAUDE_BIN", "claude"), "-p", "--settings", data["settings"], "--model", data["model"]]
     if data.get("effort"):
-        argv += ["--effort", str(data["effort"])]  # A1.6 and A5.6 (ruling 123): the effort is a Claude argument
+        argv += ["--effort", str(data["effort"])]  # A1.6 and A5.6: the effort is a Claude argument
     if (data.get("project_settings") or project_settings()) != "include":
         # The project's instructions load only with --add-dir plus the variable (smoke 2, 19 Nov).
         argv += ["--setting-sources", "user", "--add-dir", str(data["cwd"])]
@@ -1820,7 +1988,7 @@ def codex_sandbox(data: dict, node: dict) -> list[str]:
         args = ["--sandbox", "workspace-write", "--skip-git-repo-check", "--cd", str(scratch)]
         if role == "reviewer":
             # A reviewer writes only verdict.json into its scratch folder: no writable state or tracker folder
-            # (AC-94 row 2, amendment 6).
+            # (AC-94 row 2).
             return args
         for root in (pinned.get("YGG_STATE_ROOT"), pinned.get("YGG_FILES_ROOT")):
             if root:
@@ -1900,7 +2068,7 @@ def _supervise(activation: str) -> int:
         environment = child_env(data)
     else:
         argv, environment = claude_command(data, child_env(data))
-        # The prompt reaches Claude Code on standard input (ruling 105), never as an argument.
+        # The prompt reaches Claude Code on standard input, never as an argument.
         stdin_text = prompt
     node_id = data["node"]
     from . import lifecycle
@@ -2003,7 +2171,7 @@ def _supervise(activation: str) -> int:
     # The prompt reaches the agent on standard input, which is then closed.
     process.communicate(input=stdin_text)
     code = process.returncode
-    # The exit is recorded only once the agent's whole process group is gone (AC-71 row 3, amendment 17): a
+    # The exit is recorded only once the agent's whole process group is gone (AC-71 row 3): a
     # child it left behind still works in the lane.
     from . import interlock
     while interlock.group_alive(process.pid):

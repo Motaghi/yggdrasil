@@ -30,7 +30,7 @@ INTERRUPTED = "a cancel on this lane was interrupted; ask your main session to f
 OWN_FILES = (".claude/settings.json", ".ygg-managed")
 
 
-# ---------------------------------------------------------------- records (lane 1's lanedrop)
+# ---------------------------------------------------------------- records (the lane-drop module's)
 
 def _lanedrop():
     from . import lanedrop
@@ -225,7 +225,7 @@ def settle_messages(project: str) -> None:
             state.save_inbox(node_id, items)
 
 
-# ---------------------------------------------------------------- the launcher's checks (lane 3's slots)
+# ---------------------------------------------------------------- the launcher's checks (its slots)
 
 def reserve_check(node: dict) -> str | None:
     """launcher.RESERVE_CHECKS: no reservation in a lane with an interrupted cancel."""

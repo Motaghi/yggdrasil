@@ -226,7 +226,7 @@ def _reconcile_lifecycle(node_id: str, activation: str, runtime: dict, data: dic
     if done is None and found:
         from . import t3
         if t3.is_t3(node_id, activation):
-            t3.reconcile(node_id, activation)  # ruling 106: T3's own report of the thread decides
+            t3.reconcile(node_id, activation)  # T3's own report of the thread decides
             return
     if done == "aborted":
         if runtime.get("outcome") in ("uncertain", "pending") or data.get("outcome") != "aborted":
@@ -259,6 +259,9 @@ def _reconcile_lifecycle(node_id: str, activation: str, runtime: dict, data: dic
             state.set_state(node_id, "idle")
         return
     seen = lifecycle.settle(node_id, activation, data, found)
+    if seen == "pending" and _second_window_over(data):
+        launcher.hold_uncertain(node_id, activation, "no process reported within the second confirm window")
+        return
     if seen in ("pending", "unknown", "aborted"):
         return
     if seen in ("unsettled", "corrupt"):
@@ -273,6 +276,20 @@ def _reconcile_lifecycle(node_id: str, activation: str, runtime: dict, data: dic
         launcher.finalize(node_id, activation, "confirmed", resolving=("pending", "uncertain"))
         return
     launcher.hold_uncertain(node_id, activation, "spawned, no agent evidence and no exit record")
+
+
+def _second_window_over(data: dict) -> bool:
+    """A start that reported no process by the end of its recorded second confirm window (A11 AC-22, AC-77),
+    judged on YGG_NOW from the reservation. Without a recorded window (switch off), never."""
+    window = data.get("confirm_window_seconds")
+    if not window or data.get("pid") is not None or data.get("exited_at") is not None or \
+            data.get("outcome") not in ("pending", None):
+        return False
+    try:
+        age = (util.now() - util.parse_time(str(data.get("reserved_at")))).total_seconds()
+    except (TypeError, ValueError):
+        return False
+    return age >= float(window)
 
 
 def _hold_spawned(node_id: str, activation: str, seen: str) -> None:
@@ -669,7 +686,7 @@ def launch_queue(queue: list[dict], started: float | None = None) -> dict:
             launch_refused(node_id, error)
             continue
         launch_refused(node_id, None)
-        if isinstance(result, dict) and result.get("started") is False:
+        if isinstance(result, dict) and result.get("started") is False and result.get("outcome") != "pending":
             failed.append(node_id)
             continue
         launched.append(node_id)
@@ -700,7 +717,7 @@ def tick() -> dict:
     repair = getattr(launcher, "repair_hooks", None)
     if repair is not None:
         try:
-            repair()  # lane 3: the hooks folder in the safety folder, re-created against its hash (A11 AC-96)
+            repair()  # the hooks folder in the safety folder, re-created against its hash (A11 AC-96)
         except YggError:
             pass
     tracker.refresh()  # a remote tracker's cache is brought up to its revision (one request when idle)
@@ -729,19 +746,19 @@ def tick() -> dict:
 # only its own slot with a "module:function" reference to a function() in a file it owns. A step's refusal
 # (YggError) doesn't stop the steps after it. Switched features check release.on(<switch>) inside their step.
 BEFORE_LAUNCH_STEPS = (
-    ("busy_ceiling", "busy:ceiling_step"),  # lane 2: busy records past busy_max_minutes fall back to the stall rules (AC-02, AC-39)
-    ("reviews", "review:step"),  # lane 2: open, relaunch, hold and route package reviews; stale reviews (AC-12, AC-13,
+    ("busy_ceiling", "busy:ceiling_step"),  # busy records past busy_max_minutes fall back to the stall rules (AC-02, AC-39)
+    ("reviews", "review:step"),  # open, relaunch, hold and route package reviews; stale reviews (AC-12, AC-13,
                               #         AC-56 to AC-61)
-    ("stage_close", "stageclose:step"),  # lane 2: ready-to-close, PM close task, auto close; release.on("stage_close")
+    ("stage_close", "stageclose:step"),  # ready-to-close, PM close task, auto close; release.on("stage_close")
                               #         (AC-14, AC-62, AC-63)
-    ("merge_check", "mergecheck:tick_step"),    # lane 4: start and finish merge checks, ready-to-merge (AC-27, AC-83, AC-84)
-    ("needs_l1", "stageclose:needs_l1_step"),  # lane 2: ygg-needs-l1 after needs_l1_minutes (AC-80)
+    ("merge_check", "mergecheck:tick_step"),    # start and finish merge checks, ready-to-merge (AC-27, AC-83, AC-84)
+    ("needs_l1", "stageclose:needs_l1_step"),  # ygg-needs-l1 after needs_l1_minutes (AC-80)
 )
 AFTER_LAUNCH_STEPS = (
-    ("alert_delivery", "alertdelivery:tick_step"),  # lane 4: deliver user-class alerts within alert_tick_budget_seconds (AC-28, AC-86,
+    ("alert_delivery", "alertdelivery:tick_step"),  # deliver user-class alerts within alert_tick_budget_seconds (AC-28, AC-86,
                                #         AC-87)
-    ("summary", None),         # lane 4: the hourly summary; release.on("summary") (AC-07, AC-44)
-    ("dashboard", "dashboard:tick_step"),       # lane 4: write the dashboard file; release.on("dashboard") (AC-08, AC-45 to AC-48)
+    ("summary", None),         # the hourly summary; release.on("summary") (AC-07, AC-44)
+    ("dashboard", "dashboard:tick_step"),       # write the dashboard file; release.on("dashboard") (AC-08, AC-45 to AC-48)
 )
 
 
@@ -763,7 +780,7 @@ def run() -> int:
 
     signal.signal(signal.SIGTERM, finish)
     signal.signal(signal.SIGINT, finish)
-    # Ruling 109: under Linear the fallback tick is 30 seconds unless the user configures one.
+    # under Linear the fallback tick is 30 seconds unless the user configures one.
     configured = str((config.explain_all().get("tick_seconds") or (None, "core"))[1]) != "core"
     interval = float(config.get("tick_seconds", 15)) if configured or tracker.selected() != "linear" else 30.0
     while not stop["flag"]:

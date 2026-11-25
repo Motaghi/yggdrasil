@@ -24,9 +24,9 @@ _EXIT = re.compile(r"Exit code (-?\d+)")
 # EXTENSION POINT (A11 seam): post-event handlers, in order. Each lane fills only its own slot with a
 # "module:function" reference; the function takes the event dict from `parse`.
 HANDLERS = (
-    ("busy", "busy:on_post"),  # lane 2: clear the in-flight call by (activation, tool_use_id); refresh the heartbeat
+    ("busy", "busy:on_post"),  # clear the in-flight call by (activation, tool_use_id); refresh the heartbeat
                            #         (AC-02, AC-39, AC-40)
-    ("retry_cap", "retrycap:record"),  # lane 1: count failures of the same command and reset on success (AC-23, AC-78);
+    ("retry_cap", "retrycap:record"),  # count failures of the same command and reset on success (AC-23, AC-78);
                            #         only when release.on("retry_cap")
 )
 

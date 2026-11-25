@@ -132,7 +132,7 @@ def node_add(node_id, role, parent, pairs_with=None):
                 raise util.usage("--pairs-with must name team leads of project " + str(project) + ": '" +
                                  paired + "'")
         from . import models
-        # D1: Codex builds come in v1.1 (A11 seam, AC-99 row 2).
+        # D1: Codex builds are planned for a later release (A11 seam, AC-99 row 2).
         models.refuse_codex_builder(dict(entry, project=project, programme=parent_node.get("programme")))
         tracker.add_node_entry(tracker.nodes_file(project), entry)
     return "node " + node_id + " added\n"
@@ -161,6 +161,40 @@ def _project_for(name):
     if data is None:
         raise util.usage("unknown project '" + str(name) + "'")
     return data
+
+
+PID_READY_REFUSAL = "pid-ready is only for a new, rejected or replanned PID"
+
+
+def _replan_decided(project_name) -> bool:
+    """True when the newest follow-up decision of a rejected exception plan was answered `replan`."""
+    # The follow-up is found by the `exception` key that only `exception_decide` writes, never by its question
+    # text, and only a user's answer counts: an agent can raise a decision with any question, and inside an
+    # envelope a provisional decision is answered by the envelope, not by the user.
+    def number(identifier) -> int:
+        digits = str(identifier or "").rpartition("-")[2]
+        return int(digits) if digits.isdigit() else -1
+
+    issues = tracker.issues(project_name)
+    exceptions = [i for i in issues if i.get("kind") == "exception"]
+    if not exceptions:
+        return False
+    newest = max(exceptions, key=lambda i: number(i.id))
+    if newest.get("state") != "closed" or newest.get("resolution") != "reject":
+        return False
+    follow_ups = [i for i in issues if i.get("kind") == "decision" and i.get("exception") == newest.id]
+    return any(i.get("chosen") == "replan" and i.get("chosen_by") == "user" for i in follow_ups)
+
+
+def _check_pid_ready_allowed(project):
+    current = project.get("state")
+    if current in ("initiating", "pid-rejected"):
+        return
+    if current == "exception":
+        if _replan_decided(project["id"]):
+            return
+        raise util.refuse(project["id"] + " is in exception with no replan decided: " + PID_READY_REFUSAL)
+    raise util.refuse(project["id"] + " is " + str(current) + ": " + PID_READY_REFUSAL)
 
 
 def _actor_node(as_node, project, nodes):
@@ -220,6 +254,7 @@ def tracker_write(as_node, project_name, kind, body, stage=None, package=None, w
             else:
                 issue = existing
                 issue.header["title"] = title
+                issue.header["updated_at"] = util.iso()  # a rewrite is a change (the blockers line's age, AC-19)
                 if stage:
                     issue.header["milestone"] = int(stage)
             issue.body = body
@@ -270,12 +305,19 @@ def tracker_write(as_node, project_name, kind, body, stage=None, package=None, w
                 header["health"] = match[1] if match else "onTrack"
             tracker.write_update(pid_name, "-" + kind, util.render_frontmatter(header, body + "\n"))
             if kind == "highlight":
-                project["health"] = header["health"]
-                tracker.save_project(project)
+                # Read again under the lock: the copy read before it may be stale, and saving it back would undo a
+                # state change made in between.
+                fresh = _project_for(pid_name)
+                fresh["health"] = header["health"]
+                tracker.save_project(fresh)
             return kind + " written\n"
         if kind == "pid-ready":
-            project["state"] = "pid-ready"
-            tracker.save_project(project)
+            # The first step under the lock: read the project again, check that copy and save that copy, so a
+            # state change made between the first read and the lock is neither missed nor overwritten.
+            fresh = _project_for(pid_name)
+            _check_pid_ready_allowed(fresh)
+            fresh["state"] = "pid-ready"
+            tracker.save_project(fresh)
             state.alert("ygg-pid-ready", "PID ready for approval: " + pid_name, project=pid_name)
             return "pid ready\n"
         slug = kind
@@ -508,7 +550,7 @@ def routemap_write(as_node, project_name, file):
             raise util.usage("route map is missing section '" + section + "'")
     meta = {k: v for k, v in header.items() if k not in PROTECTED_KEYS}
     meta.update(schema="ygg.routemap.v1", project=project["id"], standard_version=STANDARD_VERSION,
-                actor="ygg-app", node=as_node, kind="route-map")
+                actor="ygg-app", node=as_node, kind="route-map", written_at=util.iso())
     with util.locked():
         tracker.ensure_writable()
         tracker.write_document(project["id"], "route-map",
@@ -739,18 +781,18 @@ def pid_approve(project_name):
     validate_pid(header)
     validate_delivery(project_name)
     from . import models
-    models.refuse_codex_project(project_name)  # D1: Codex builds come in v1.1 (A11 seam, AC-99 row 1)
+    models.refuse_codex_project(project_name)  # D1: Codex builds are planned for a later release (A11 seam, AC-99 row 1)
     programme = tracker.programme(project["programme"]) or {}
     try:
-        from . import mergecheck  # lane 4 owns the rule (A11 AC-85 row 1)
+        from . import mergecheck  # the merge-check module owns the rule (A11 AC-85 row 1)
         mergecheck.refuse_repo_count(project_name, header)
     except (ImportError, AttributeError):
         pass
     if programme.get("kind") in ("git-repo", "shared-tree"):
-        # Amendment 29 (ruling 135, A11 AC-85 row 1): one repo per git project in v1.0.
+        # One repo per git project (A11 AC-85 row 1); more are planned for a later release.
         repos = [r for r in header.get("repos") or [] if isinstance(r, dict)]
         if len(repos) > 1:
-            raise util.refuse("projects with more than one repo come in v1.1")
+            raise util.refuse("projects with more than one repo are not in this release")
         if not repos:
             raise util.refuse("a git project needs one repo")
     warnings = []
@@ -1039,7 +1081,7 @@ def stage_approve(project_name):
             final = following is None and not any(s.get("state") == "planned" for s in data["stages"])
             kind = (tracker.programme(project.get("programme")) or {}).get("kind")
             if final and kind in ("git-repo", "shared-tree"):
-                # D4, amendment 13: a git project stays executing after its last approval until every package
+                # D4: a git project stays executing after its last approval until every package
                 # is merged and the merge check passes; it closes only once main contains its work.
                 import uuid
                 transition = {"id": "stage-approval:" + str(number) + ":" + uuid.uuid4().hex[:8],
@@ -1089,7 +1131,7 @@ def wp_authorise(project_name, package, lane):
     if not lane_node or lane_node.get("project") != project_name or lane_node.get("role") not in ("tl", "su"):
         raise util.usage("unknown lane '" + str(lane) + "' in project " + project_name)
     from . import models
-    models.refuse_codex_builder(lane_node, package)  # D1: Codex builds come in v1.1 (A11 seam, AC-99 row 2)
+    models.refuse_codex_builder(lane_node, package)  # D1: Codex builds are planned for a later release (A11 seam, AC-99 row 2)
     with util.locked():
         tracker.ensure_writable()
         issue = _package(project_name, package)
@@ -1106,7 +1148,7 @@ def wp_authorise(project_name, package, lane):
         view = delivery_view(project_name, pid_header)
         if isinstance(limit, int) and view.get("approach") == "agile" and view.get("cadence") == "flow":
             from . import workahead
-            # A held later-stage package is an early authorisation, not work in progress (Amendment A4).
+            # A held later-stage package is an early authorisation, not work in progress.
             active = [i for i in tracker.issues(project_name) if i.get("kind") == "work-package"
                       and i.get("state") in WIP_STATES and i.id != package and workahead.wip_counts(project_name, i)]
             if len(active) >= limit:
@@ -1148,7 +1190,7 @@ def wp_complete(from_node, package):
         raise util.refuse("writer: only the lane team lead completes " + package)
     from . import review
     if review.project_reviewer(issue.project, nodes) is not None:
-        return review.ready(from_node, package, complete=True)  # amendment 8: it opens a review (AC-58 row 2)
+        return review.ready(from_node, package, complete=True)  # it opens a review (AC-58 row 2)
     with util.locked():
         tracker.ensure_writable()
         issue = _find_package_any(package, from_node)
@@ -1252,7 +1294,7 @@ def review_record(from_node, package, round_number, verdict):
         raise util.refuse("writer: " + from_node + " cannot write review records")
     issue = _find_package_any(package, from_node)
     from . import review
-    review.check_review_record(issue)  # amendment 24 (AC-59 row 3)
+    review.check_review_record(issue)  # AC-59 row 3
     with util.locked():
         tracker.ensure_writable()
         issue = _find_package_any(package, from_node)
@@ -1596,7 +1638,8 @@ def exception_decide(identifier, plan):
                                              options=["replan", "close"], recommended="replan", chosen=None,
                                              chosen_by=None, reversible=False, undo=None, aligns=None,
                                              scope={"type": "project", "id": project["id"]}, action=None, target=None,
-                                             provenance={"type": "agent", "origin": project["pm"]})
+                                             provenance={"type": "agent", "origin": project["pm"]},
+                                             exception=identifier)
                 decision.save()
         return "exception " + identifier + " " + plan + "\n"
 

@@ -44,23 +44,34 @@ Run the other suites the same way, one folder at a time, for example `pytest tes
 
 Each test carries an `ac` marker naming the acceptance criteria it covers. The suites are the bar for a change: if a change needs a frozen test to change, raise it as an issue rather than editing the test.
 
-### Rows that fail by design in v1.0.0
+### Rows that fail by design in v1.1.0
 
-In the published v1.0.0 tree, 26 rows of `tests/acceptance-a11` fail, and are expected to. Each is marked `release('fallback-v1.1')`: it tests a part that is not finished in v1.0.0 and is planned for v1.1. Fifteen are listed first. The other 11 test `ygg dashboard serve`, which the shipped switches in `src/yggdrasil/data/release.yaml` turn off, so the server never starts and the command says it is not in this release. The release notes list the matching limits under [Limits of this release](releases/v1.0.0.md#limits-of-this-release). A red row in `tests/acceptance-a11` that is not in this list is a real failure.
+In the published v1.1.0 tree, 10 rows of `tests/acceptance-a11` fail, and are expected to. Each is marked `release('fallback-v1.1')`. The mark is frozen and v1.1 does not change it, but the work it tests comes later: 8 rows test Codex builders, planned for v1.1.1, and 2 test sending urgent messages straight into a running T3 thread, planned for v1.2. A red row in `tests/acceptance-a11` that is not in the table below, and not behind a switch that shipped off (see the next paragraph), is a real failure.
+
+On the main branch, `src/yggdrasil/data/release.yaml` keeps every switch on. A published tag carries the shipped copy of that file instead, written at release time by the build-only `scripts/release-switches` from the results of the acceptance checkpoint: a switch ships on only when every criterion it carries is green. So the file in a tag shows which switches shipped off. The rows of a switch that ships off also fail by design, and the [release notes](releases/v1.1.0.md) list them. The second table names the rows of the two optional switches, `confirm_window` and `dashboard_serve`, which can ship off.
 
 | Rows | Criterion | Why it fails |
 |---|---|---|
-| `test_lane2_conductor.py::test_ac22_confirm_windows[1]`, `[2]`, `[3]` | AC-22 | The longer confirmation window for slow agent starts is not finished. A start that isn't confirmed within the fixed window shows as held instead of starting. |
-| `test_lane2_conductor.py::test_ac77_window_bounds[2]` | AC-77 | The same confirmation window. |
-| `test_lane3_launcher.py::test_ac36_t3_live_thread[1]`, `[2]` | AC-36 | Sending urgent messages straight into a running T3 thread is not finished; the test sees no message sent to the thread. |
-| `test_lane4_modules.py::test_ac50_loopback_user_only[1]` | AC-50 | The network check for `ygg dashboard serve`, which is not finished. The test connects to the machine's own non-loopback IPv4 address, so on a machine without one it fails with "AC-50 requires a host with a non-loopback IPv4 address", as it did in the release run. |
-| `test_lane1_hooks.py::test_ac30_codex_commit_guards[1]`, `[2]`, `[3]` | AC-30 | Commit guards for Codex builders (team leads and workers). v1.0 refuses Codex for every role but the project reviewer; Codex builders come in v1.1. |
+| `test_lane3_launcher.py::test_ac36_t3_live_thread[1]`, `[2]` | AC-36 | The urgent T3 live send moved to v1.2; the test sees no message sent to the thread. |
+| `test_lane1_hooks.py::test_ac30_codex_commit_guards[1]`, `[2]`, `[3]` | AC-30 | Commit guards for Codex builders (team leads and workers). Codex builders are planned for v1.1.1; v1.1 refuses Codex for every role but the project reviewer. |
 | `test_lane1_hooks.py::test_ac91_codex_git_hooks[1]`, `[2]`, `[3]` | AC-91 | Git hooks for Codex builders, as above. |
 | `test_lane1_hooks.py::test_ac92_row1_codex_prompt` | AC-92 | The prompt for a Codex team lead, as above. |
 | `test_lane1_hooks.py::test_ac92_row2_codex_clean_commit` | AC-92 | A clean commit by a Codex builder, as above. |
-| `test_lane4_modules.py::test_ac09_row1_serves_file`, `test_ac09_row2_read_only[DELETE]`, `[POST]`, `[PUT]`, `test_ac09_row3_paths_refused` (4 rows: `[/x]`, `[/%2e%2e/state]`, `[/../alerts.jsonl]`, `[/dashboard/beta.html]`); 8 rows in all | AC-09 | `ygg dashboard serve` is switched off in the shipped build. |
-| `test_lane4_modules.py::test_ac49_allowed_host[1]`, `[2]` | AC-49 | The same switched-off dashboard server. |
-| `test_lane4_modules.py::test_ac50_loopback_user_only[2]` | AC-50 | The same switched-off dashboard server. |
+
+If a switch ships off, these rows fail too:
+
+| Switch | Rows | Criterion |
+|---|---|---|
+| `confirm_window` | `test_lane2_conductor.py::test_ac22_confirm_windows[1]`, `[2]`, `[3]`; `test_ac77_window_bounds[2]` | AC-22, AC-77 |
+| `dashboard_serve` | `test_lane4_modules.py::test_ac09_row1_serves_file`, `test_ac09_row2_read_only[DELETE]`, `[POST]`, `[PUT]`, `test_ac09_row3_paths_refused` (4 rows: `[/x]`, `[/%2e%2e/state]`, `[/../alerts.jsonl]`, `[/dashboard/beta.html]`); `test_ac49_allowed_host[1]`, `[2]`; `test_ac50_loopback_user_only[1]`, `[2]` | AC-09, AC-49, AC-50 |
+
+`test_ac50_loopback_user_only[1]` needs a release host that passes this check: the host name resolves to a non-loopback IPv4 address, and a connection to that address on a closed port is refused, not dropped. On a machine without such an address it fails with "AC-50 requires a host with a non-loopback IPv4 address". Run the check on the release host before you rely on the row.
+
+One optional row of the v1.1 suite (`tests/acceptance-v1-1`) is red because its item was cut from v1.1:
+
+| Rows | Criterion | Why it fails |
+|---|---|---|
+| `test_resolved_criteria.py::test_ac20_changed_testing_details_send_one_urgent_notice_with_no_change_control` | AC-20 | The testing-race notice was cut from v1.1 (optional item O-5) and moves to v1.2. |
 
 One more row can fail under heavy machine load: `test_lane2_conductor.py::test_ac40_row1_starting` (AC-40) checks a start within a short window. Run it alone to check it; it passes on an idle machine.
 
