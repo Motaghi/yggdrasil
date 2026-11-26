@@ -1,4 +1,4 @@
-"""Core support a private profile needs (M5): L1 on the live pools, and the profile's platform pause dir."""
+"""Profile support: model routing for the main session and launched nodes, and the outside pause dir."""
 
 from yggdrasil import util
 from test_round2 import clear_caches, world  # noqa: F401  (fixture and helper)

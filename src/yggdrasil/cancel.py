@@ -143,9 +143,12 @@ def cancel(project_name: str, packages: list[str], finish: str | None = None, co
     for package in packages:
         util.check_record_id(package)
     drop = _lanedrop()
+    # The lane lock comes before the journal lock (the clone lane's assembly takes it), so the lane is read first in a
+    # short journal-lock hold, its lane lock taken, and every check below re-run under the journal lock.
+    hint = _lane_hint(project_name, packages)
     # Every check runs under the lock, held from the first check through the drop record, the reset, the state writes
     # and the completion fact, so no reservation, ready or other cancel can come in between (A11.1 AC-13).
-    with util.locked():
+    with _lane_lock(project_name, hint), util.locked():
         tracker.ensure_writable()
         nodes = state.all_nodes()
         issues = []
@@ -163,6 +166,8 @@ def cancel(project_name: str, packages: list[str], finish: str | None = None, co
                 raise util.refuse(issue.id + " is " + str(issue.get("state")) + "; cancel takes only authorised, "
                                   "rejected, stopped, review-exhausted or suspended packages")
         lane = str(issues[0].get("lane"))
+        if lane != hint:
+            raise util.refuse("the lane of " + issues[0].id + " changed while the cancel waited; try again")
         if interrupted(project_name, lane):
             raise util.refuse(INTERRUPTED)
         home = _home(project_name)
@@ -170,7 +175,9 @@ def cancel(project_name: str, packages: list[str], finish: str | None = None, co
         refusal = _running_refusal(lane, nodes)
         if refusal:
             raise util.refuse(refusal)
-        if _dirty(worktree):
+        clone = _clone(project_name, lane)
+        # A clone lane's box is quarantined whole, uncommitted changes included, so nothing is lost (v1.1.1).
+        if clone is None and _dirty(worktree):
             raise util.refuse("the lane has uncommitted changes")
         named = set(packages)
         for issue in tracker.issues(project_name):
@@ -178,12 +185,52 @@ def cancel(project_name: str, packages: list[str], finish: str | None = None, co
                     issue.get("state") not in FINISHED and issue.get("state") != "planned":
                 raise util.refuse("finish or cancel " + issue.id + " on this lane first")
         plan = drop.plan(project_name, lane, packages, home)  # refuses when a dropped commit already landed
+        if clone is not None:
+            plan["clone_generation"] = clone.get("generation")
         identifier = drop.record(project_name, plan)
         _crash_point("cancel-after-drop-record")
+        if clone is not None:
+            _quarantine_clone(project_name, lane, dict(plan, id=identifier))
         drop.reset(home, project_name, lane, plan["drop_point"])
         _finish_state(project_name, packages, lane, nodes)
         drop.complete(project_name, identifier)
     return drop.summary(plan)
+
+
+# ---------------------------------------------------------------- clone lanes (v1.1.1)
+
+def _lane_hint(project: str, packages: list[str]) -> str | None:
+    """The one lane the named packages are on, read in a short journal-lock hold; None when that is not one lane."""
+    with util.locked():
+        lanes = set()
+        for package in packages:
+            issue = tracker.read_issue(project, package)
+            if issue is None or issue.get("kind") != "work-package":
+                return None
+            lanes.add(str(issue.get("lane")))
+    return lanes.pop() if len(lanes) == 1 else None
+
+
+def _lane_lock(project: str, lane: str | None):
+    """The lane's clone lock (taken before the journal lock), or nothing for a lane name that is not an id."""
+    import contextlib
+    from . import clones
+    try:
+        return clones.lane_lock(project, lane) if lane is not None else contextlib.nullcontext()
+    except YggError:
+        return contextlib.nullcontext()
+
+
+def _clone(project: str, lane: str) -> dict | None:
+    """The lane's live clone record, or None for a worktree lane (or a closed clone lane)."""
+    from . import clones
+    record = clones.read(project, lane)
+    return record if record and record.get("kind") == "lane" and record.get("state") != "closed" else None
+
+
+def _quarantine_clone(project: str, lane: str, drop: dict) -> None:
+    from . import quarantine
+    quarantine.quarantine_clone(project, lane, drop)
 
 
 def _finish_state(project: str, packages: list[str], lane: str, nodes: dict) -> None:
@@ -571,6 +618,11 @@ def _preview(project: str, record: dict) -> tuple[list[str], str, dict]:
     extra = [c for c in plan["dropped"] if c not in (record.get("commits") or [])]
     if extra:
         lines.append("commits not in the drop record: " + " ".join(c[:7] for c in extra))
+    if record.get("clone_generation") is not None:
+        from . import clones, quarantine
+        box = quarantine.lane_folder(home, project) / clones.box_name(lane, int(record["clone_generation"]))
+        lines.append("the box " + str(box) + " is quarantined where it stands and kept; the next generation is "
+                     "built at " + str(point)[:7])
     root = str(worktree)
     present = worktree.is_dir()
     target = _tree_entries(root, point) if present else {}
@@ -597,10 +649,18 @@ def finish_cancel(project: str, lane: str, code: str | None) -> str:
     found = interrupted(project, lane)
     if not found:
         raise util.refuse("no interrupted cancel on this lane")
-    record = found[-1]
-    nodes = state.all_nodes()
+    seen = found[-1]
     drop = _lanedrop()
-    with util.locked():
+    with _lane_lock(project, lane), util.locked():  # the lane lock first, as in the cancel
+        # Another --finish may have completed or changed the drop, and a node may have been added, while this one
+        # waited for the locks: both are read again here, before the preview and its digest.
+        found = interrupted(project, lane)
+        if not found:
+            raise util.refuse("the interrupted cancel on this lane was finished while --finish waited")
+        record = found[-1]
+        if record != seen:
+            raise util.refuse("the interrupted cancel on this lane changed while --finish waited; run --finish again")
+        nodes = state.all_nodes()
         refusal = _running_refusal(lane, nodes)
         if refusal:
             raise util.refuse(refusal)
@@ -613,7 +673,10 @@ def finish_cancel(project: str, lane: str, code: str | None) -> str:
         worktree = _worktree(home, project, lane)
         if plan["extra"]:
             drop.add_commits(project, record["id"], plan["extra"])
-        if worktree.is_dir():
+        if record.get("clone_generation") is not None:
+            # `git clean` never runs on a box; the box of the drop record's generation is quarantined instead.
+            _quarantine_clone(project, lane, record)
+        elif worktree.is_dir():
             # A directory where the drop point has a file goes first, so the reset can write the file back.
             util.trusted_git("-C", str(worktree), "clean", "-ffdxq", *[x for name in OWN_FILES for x in ("-e", "/" + name)])
         drop.reset(home, project, lane, record["drop_point"], clean=True)
@@ -628,6 +691,6 @@ class PreviewRefusal(YggError):
 
 
 def _preview_refusal(lines: list[str], digest: str) -> YggError:
-    error = PreviewRefusal(util.EXIT_REFUSED, "the cancel isn't finished; check the listing, then run --yes <code>")
+    error = PreviewRefusal(util.EXIT_REFUSED, "the cancel isn't finished; check the listing, then run --yes " + digest)
     error.stdout = "\n".join(lines + ["finish code: " + digest]) + "\n"
     return error

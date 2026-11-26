@@ -301,7 +301,13 @@ def release_locks(targets: list) -> list[str]:
         if key in done or group_alive(pid):
             continue
         done.add(key)
-        cwd = launcher.receipt(key).get("cwd")
+        data = launcher.receipt(key)
+        cwd = data.get("cwd")
+        if data.get("cli") == "codex" or (cwd and _in_a_box(str(cwd))):
+            # A Codex receipt's folder is a box or a scratch folder, and a folder inside a registered box is the
+            # agent's whatever the receipt says: trusted code never stats it or runs git there (v1.1.1,
+            # invariant T); the tender's `prepare --sole` removes a stale lock in a box.
+            continue
         if not cwd or not os.path.isdir(str(cwd)):
             continue
         found = util.trusted_git("-C", cwd, "rev-parse", "--git-path", "index.lock")
@@ -322,6 +328,13 @@ def release_locks(targets: list) -> list[str]:
         except OSError as error:
             notes.append("index.lock kept: " + str(error))
     return notes
+
+
+def _in_a_box(path: str) -> bool:
+    """Whether `path` is a registered clone's checkout or lies inside a live or quarantined box, decided from the
+    registry and a walk that stops at the first box (quarantine.inside_box), never by looking inside one."""
+    from . import quarantine
+    return quarantine.is_clone_checkout(path) or quarantine.inside_box(path)
 
 
 def _open_elsewhere(path: Path) -> bool:

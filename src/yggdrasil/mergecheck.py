@@ -164,11 +164,22 @@ def resolve_repo(project_id: str, repo: str | None) -> str:
         if len(paths) != 1:
             raise util.refuse("gate: " + project_id + " has no single approved repo; name it with --repo")
         return paths[0]
-    from .gitops import repo_home
-    home = repo_home(str(repo))
+    from . import quarantine
+    quarantine.refuse_box_repo(repo, (tracker.project(project_id) or {}).get("programme"))
+    # Match the caller's path to an approved repo by its resolved path first, without running git through it.
+    # A relayed call (a Codex agent's) must match that way; only a direct caller falls back to the git-based
+    # match, which also accepts a worktree of the approved repo. Either way only the approved path is returned,
+    # never the caller's spelling, which can be a link the caller retargets once this check has passed.
+    real = os.path.realpath(str(repo))
     for path in paths:
-        if repo_home(path) == home:
+        if os.path.realpath(path) == real:
             return path
+    if not util.env("YGG_VIA_RELAY"):
+        from .gitops import repo_home
+        home = repo_home(str(repo))
+        for path in paths:
+            if repo_home(path) == home:
+                return path
     raise util.refuse("gate: no approved PID of " + project_id + " names " + str(repo))
 
 

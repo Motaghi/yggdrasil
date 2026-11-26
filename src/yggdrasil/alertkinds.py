@@ -34,12 +34,15 @@ NEXT_STEPS = {
     "ygg-protection-missing": "Protect main, or ask your main session to set branch protection to warn.",
     "ygg-tracker-corrupt": "Stop and ask your main session to repair the tracker.",
     "ygg-cancel-interrupted": 'Tell your main session "finish the cancel".',  # A11.1 AC-13
+    "ygg-clone-replaced": ("Ask your main session why the lane's clone keeps running out of time; inspect the kept "
+                           "boxes before you move them."),  # v1.1.1
 }
 USER_KINDS = frozenset(NEXT_STEPS)
 UNCERTAIN_USER_AFTER_SECONDS = 300
 
 # Log-class kinds A11 names (no next step for the user).
-LOG_KINDS = frozenset({"ygg-alert-undelivered", "ygg-corrupt-evidence"})
+LOG_KINDS = frozenset({"ygg-alert-undelivered", "ygg-corrupt-evidence",
+                       "ygg-codex-sign-in"})  # v1.1.1: a Codex launch with no sign-in route
 
 # Message templates for `ygg test alert <kind>` (test mode), so a test-raised alert reads like the real one.
 # A lane that raises a kind writes its own message; these only fill the fixture verb.

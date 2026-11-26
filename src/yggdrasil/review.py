@@ -371,15 +371,28 @@ def ready(from_node: str, package: str, *, complete: bool = False) -> str:
     reviewer = project_reviewer(project, nodes)
     if reviewer is None:
         raise util.refuse("gate: project " + project + " has no reviewer node")
-    head = lane_head(project, from_node) or _create_lane(project, from_node)
+    from . import clones
+    clone_lane = clones.is_clone_lane(project, from_node)
+    received = None
+    if clone_lane:
+        # v1.1.1: the receive step (steps 1 to 7) before the D5 re-check and before any review opens.
+        received = clones.receive(project, from_node, from_node=from_node if util.current_node() else None)
+    head = (received or {}).get("head") or lane_head(project, from_node) or _create_lane(project, from_node)
     if not head:
         raise util.refuse("gate: lane " + from_node + " has no branch to review")
     base = merge_base(project, head) or head
-    _trusted_recheck(project, package, from_node, base, head)
-    with util.locked():
+    if not received:
+        _trusted_recheck(project, package, from_node, base, head)
+    import contextlib
+    # A receive's final hold takes the lane's clone lock before the journal lock, as cancel and cleanup do.
+    lane_held = clones.lane_lock(project, from_node) if received else contextlib.nullcontext()
+    with lane_held, util.locked():
         tracker.ensure_writable()
         issue = _issue(project, package)
-        # Repeated under the lock, so two concurrent readies open one review (A11 AC-12 row 2).
+        # Repeated under the lock, so two concurrent readies open one review (A11 AC-12 row 2), and before the
+        # receive's ref and registry writes, so a package cancelled or moved meanwhile receives nothing.
+        if issue.get("lane") != from_node:
+            raise util.refuse("writer: only the lane team lead marks " + package + " ready")
         current = open_review(project, package)
         if current is not None and current.get("state") in OPEN_STATES:
             return "review " + current["id"] + " of " + package + " is already open\n"
@@ -387,6 +400,12 @@ def ready(from_node: str, package: str, *, complete: bool = False) -> str:
             raise util.refuse(package + " waits for the user's decision on its review cap")
         if issue.get("state") not in ("authorised", "rejected"):
             raise util.refuse("gate: " + package + " is " + str(issue.get("state")) + " and cannot be marked ready")
+        if received:
+            # Step 8 and today's D5 re-check and review opening in the same journal-lock hold. Step 8 lands only
+            # while the clone record the checks were made against is still the lane's `ready` record.
+            clones.receive_commit(project, from_node, received,
+                                  from_node=from_node if util.current_node() else None)
+            _trusted_recheck(project, package, from_node, base, head)
         data = _load("reviews")
         data["counter"] = int(data["counter"]) + 1
         identifier = "rv-" + str(data["counter"]).zfill(4)

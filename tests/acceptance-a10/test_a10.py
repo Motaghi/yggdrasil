@@ -397,6 +397,14 @@ def test_claude_prompt_and_brief_delivered_privately(a10_tree, node):
 def test_codex_prompt_and_brief_delivered_privately(a10_tree, node):
     a10_tree.brief_seed(codex=True)
     result = a10_tree.launch_and_wait(node)
-    assert result.returncode == 3
-    assert "Codex builds are not in this release" in result.stderr
-    assert [call for call in a10_tree.launches(node) if call["binary"] == "codex"] == []
+    assert result.returncode == 0
+    launches = [call for call in a10_tree.launches(node) if call["binary"] == "codex"]
+    assert launches
+    launch = launches[-1]
+    if node == "pm1su1":
+        assert all("zebra-5813" not in argument and "You are Yggdrasil node" not in argument
+                   for argument in launch["argv"])
+        assert a10_tree.delivered_privately(launch, "zebra-5813")
+    else:
+        assert all("You are Yggdrasil node pm1tl1" not in argument for argument in launch["argv"])
+        assert a10_tree.delivered_privately(launch, "You are Yggdrasil node pm1tl1")

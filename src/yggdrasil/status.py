@@ -513,10 +513,51 @@ def human(status: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _clone_lines(status: dict) -> list[str]:
+    """Per clone lane (v1.1.1): the live box first, marked `live; do not remove`, then its quarantined boxes,
+    newest first; unknown folders; the recorded total. Built from Yggdrasil's own records and the lane folder's
+    entry names only."""
+    from . import cancel, quarantine
+    lines = []
+    for project in sorted(p["id"] for p in status.get("projects") or []):
+        try:
+            if not quarantine.lane_records(project) and not quarantine.quarantine_records(project):
+                continue
+            lines += quarantine.status_lines(project, cancel._home(project))
+        except (util.YggError, OSError, ValueError):
+            continue
+    return lines
+
+
+def _held_test_clone_lines(status: dict) -> list[str]:
+    """A test clone whose removal is held (v1.1.1): its record name and Yggdrasil's own reason."""
+    from . import clones, quarantine
+    lines = []
+    for project in sorted(p["id"] for p in status.get("projects") or []):
+        try:
+            for name, record in clones.held_test_clones(project):
+                if record.get("reason") == clones.HELD_PENDING:
+                    # A removal under way, or one that stopped before it could say why: not yet known to be held.
+                    lines.append("test clone " + quarantine._printable(name) + " of " + project + ": " +
+                                 clones.HELD_PENDING)
+                    continue
+                lines.append("test clone " + quarantine._printable(name) + " of " + project + ": removal held; " +
+                             quarantine._printable(record.get("reason")))
+        except (util.YggError, OSError, ValueError):
+            continue
+    return lines
+
+
 def _a11_lines(status: dict) -> list[str]:
     """Package review lines and user rulings (A11 lane 2)."""
     from . import cancel, review
     lines = review.status_lines(status) + cancel.status_lines({p["id"] for p in status.get("projects") or []})
+    from . import codexlaunch
+    lines += codexlaunch.unprobed_review_lines({p["id"] for p in status.get("projects") or []})
+    from . import codexsignin
+    lines += codexsignin.status_lines()
+    lines += _clone_lines(status)
+    lines += _held_test_clone_lines(status)
     try:
         from . import alertdelivery  # (A11 AC-87 row 2): undelivered user alerts
         lines += list(alertdelivery.status_lines() or [])

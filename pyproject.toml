@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "yggdrasil"
-version = "1.1.0"
+version = "1.1.1"
 description = "A conductor for teams of AI coding agents, with approval gates and a tracker, inspired by PRINCE2"
 readme = "README.md"
 license = "MIT"

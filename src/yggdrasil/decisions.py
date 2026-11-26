@@ -139,7 +139,7 @@ def raise_decision(args) -> str:
             question=util.redact(args.question), options=options, recommended=args.recommended,
             chosen=None, chosen_by=None, reversible=reversible, undo=args.undo if reversible else None,
             aligns=aligns, scope=scope, action=args.action, target=util.redact(args.target or "") or None,
-            provenance={"type": "agent", "origin": args.sender})
+            provenance={"type": "agent", "origin": args.sender}, raised_with="decision-raise")
         provisional = (reversible and aligns and not args.action
                        and envelopes.effective_envelope(project) is not None)
         if provisional:

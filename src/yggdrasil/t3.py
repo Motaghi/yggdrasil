@@ -44,8 +44,9 @@ ENDED = {"completed": 0, "failed": 1}
 GONE = re.compile(r"^Thread \S+ is no longer available\.\s*$")
 MARKER_RE = re.compile(r"^\[ygg (act-[0-9]{4,9}) ([A-Za-z0-9-]+)\]$")
 HELD = 125
-# Variables a T3 call never carries: tracker credentials and the suite's Linear fake.
-CALL_ENV_DENIED = re.compile(r"^(LINEAR_|YGG_LINEAR_)")
+# Variables a T3 call never carries: tracker credentials, the suite's Linear fake, and Codex's API key (which
+# reaches only Codex agent sessions).
+CALL_ENV_DENIED = re.compile(r"^(LINEAR_|YGG_LINEAR_|CODEX_API_KEY$)")
 
 
 # ---------------------------------------------------------------- binary and versions (A5.3)
@@ -754,7 +755,7 @@ def refuse_if_closing(node: dict, nodes: dict) -> None:
     if not unresolved and not claims:
         return  # nothing is being closed: no need to work out the node's worktree
     try:
-        real = os.path.realpath(str(launcher.work_area(node, nodes)))
+        real = _area(launcher.work_area(node, nodes))
     except (YggError, KeyError, OSError) as error:
         # Something is being closed and this node's worktree cannot be worked out: fail closed.
         raise util.refuse("launch precondition: the worktree of " + str(node.get("id")) + " cannot be checked "
@@ -771,6 +772,16 @@ def refuse_if_closing(node: dict, nodes: dict) -> None:
             util.process_start(claim.get("pid")) == claim.get("started_at"):
         raise util.refuse("launch precondition: " + real + " is being closed (its T3 project and worktree are "
                           "being removed); try again after the close")
+
+
+def _area(path) -> str:
+    """A work area as these checks compare it: the real path of a worktree; a clone's registry path as a string,
+    never resolved, because a box is never a T3 worktree and a resolve would follow links inside it (v1.1.1). A
+    superseded generation's path counts too: the walk that stops at the first live or quarantined box finds it."""
+    from . import quarantine
+    if quarantine.is_clone_checkout(path) or quarantine.inside_box(path):
+        return os.path.normpath(str(path))
+    return os.path.realpath(str(path))
 
 
 def _claim(real: str) -> None:
@@ -827,7 +838,7 @@ def _unsettled(programme, real: str, project_id: str, lane: str | None) -> bool:
         if node.get("project") != project_id:
             continue
         try:
-            if os.path.realpath(str(launcher.work_area(node, nodes))) == real:
+            if _area(launcher.work_area(node, nodes)) == real:
                 users.add(node["id"])
         except (YggError, KeyError, OSError):
             users.add(node["id"])  # unknown: counted as a user of the worktree

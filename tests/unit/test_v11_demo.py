@@ -24,11 +24,11 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def test_version_sources_agree(capsys):
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
-    assert pyproject == yggdrasil.__version__ == importlib.metadata.version("yggdrasil") == "1.1.0"
+    assert pyproject == yggdrasil.__version__ == importlib.metadata.version("yggdrasil") == "1.1.1"
     with pytest.raises(SystemExit) as stopped:
         cli.main(["--version"])
     assert stopped.value.code == 0
-    assert capsys.readouterr().out == "ygg 1.1.0\n"
+    assert capsys.readouterr().out == "ygg 1.1.1\n"
 
 
 def test_demo_driver_imports_no_config_state_or_tracker():
@@ -407,7 +407,7 @@ def test_review_section_reads_both_record_shapes(monkeypatch, shape):
     assert launcher.review_section({"role": "reviewer"}, "act-0001", {}) == ""
 
 
-# ---------------------------------------------------------------- round 2: cleanup preflight
+# ---------------------------------------------------------------- cleanup preflight
 
 def test_cleanup_refuses_a_fifo(temp_folder, capsys):
     folder = _left_folder(temp_folder)
@@ -455,7 +455,7 @@ def test_cleanup_refuses_an_activation_open_in_the_journal_without_a_recorded_ag
         capsys.readouterr().err
 
 
-# ---------------------------------------------------------------- R11: merge-check start and recovery
+# ---------------------------------------------------------------- merge-check start and recovery
 
 def test_a_job_whose_identity_cannot_be_read_is_published_without_one(monkeypatch):
     real_popen = subprocess.Popen
@@ -515,7 +515,7 @@ def test_cleanup_never_runs_ygg_stop(temp_folder, monkeypatch):
     assert not any("stop" in argv for argv in started)
 
 
-# ---------------------------------------------------------------- QA round 4
+# ---------------------------------------------------------------- process identity and strict records in cleanup
 
 def _detached_group(tmp_path):
     """A process group led by a process this test does not parent (so it is reaped when it ends), with one
@@ -633,7 +633,7 @@ def test_a_dead_pid_without_identity_does_not_block_teardown(tmp_path):
     assert run.stop_everything(root, {"PATH": os.environ["PATH"]}, ran_conductor=False, use_ygg_stop=False) is None
 
 
-# ---------------------------------------------------------------- review round 5
+# ---------------------------------------------------------------- unknown pairs and vanishing processes in teardown
 
 def test_an_unknown_pair_is_skipped_and_the_others_are_still_signalled(tmp_path, monkeypatch):
     monkeypatch.setattr(run, "STEP4_SECONDS", 1)
@@ -709,7 +709,7 @@ def test_a_live_leader_of_a_signalled_group_fails_teardown(tmp_path):
         leader.wait()
 
 
-# ---------------------------------------------------------------- review round 6
+# ---------------------------------------------------------------- starting claims and changed processes in teardown
 
 def test_every_starting_claim_refuses_even_old_with_the_conductor_gone(tmp_path, monkeypatch):
     monkeypatch.setattr(run, "STEP4_SECONDS", 0.5)
@@ -1459,3 +1459,20 @@ def test_an_activation_entry_without_its_key_fails(tmp_path, key_line):
             "node: pm1su1\nphase: exited\nexit_code: 1\n```\n")
     problems, _ = run.agent_findings(tmp_path, final=True)
     assert "the programme journal has an activation entry without its key" in problems
+
+
+def test_the_demo_codex_sessions_get_a_keyless_provider_route(tmp_path, monkeypatch):
+    """The demo's Codex reviewer is the scripted stand-in on an unprobed version: its own user home names a
+    provider with no key, so its sessions have a sign-in route and raise no missing-sign-in alert."""
+    from yggdrasil import codexlaunch, codexsignin
+    data = tomllib.loads(run.CODEX_CONFIG)
+    table = data["model_providers"][data["model_provider"]]
+    assert "env_key" not in table and "env_http_headers" not in table and "http_headers" not in table
+    assert table["base_url"].startswith("http://127.0.0.1:")
+    codex_home = tmp_path / ".codex"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text(run.CODEX_CONFIG)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    name, kept = codexlaunch.user_provider()
+    assert name == data["model_provider"]
+    assert codexsignin.route({}, kept, False, version="an unknown Codex version")[0] == "provider"

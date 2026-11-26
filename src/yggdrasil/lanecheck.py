@@ -21,6 +21,7 @@ the same rules with Yggdrasil's own git over a package's commits, at `ygg wp rea
 from __future__ import annotations
 
 import os
+import stat
 import re
 import shlex
 import subprocess
@@ -123,9 +124,134 @@ def hook_scripts(ygg: str) -> dict:
     return scripts
 
 
-def _git(*args, binary: bool = False, check: bool = True):
+# ---------------------------------------------------------------- registered clones (v1.1.1)
+
+# In a commit-time hook of a registered lane clone: the clone's checkout, as `_where` found it, mapped to the
+# registered home and the home's object folder, both taken from the clone record (never from the clone's config,
+# its files or the environment). Empty in every other process, so worktree lanes and the trusted re-check in the
+# home run exactly as before.
+_CLONES: dict = {}
+
+
+def _registry_folder(project: str):
+    """`<state root>/lane-clones/<project>`, found without making or changing anything (the hook runs where the
+    state root is read-only)."""
+    from pathlib import Path
+    base = util.env("YGG_STATE_ROOT") or util._configured("state_root") or \
+        str(Path.home() / ".local" / "state" / "yggdrasil")
+    return Path(base) / "lane-clones" / project
+
+
+def clone_record_for(root: str, project: str | None, lane: str | None = None) -> dict | None:
+    """The registry record of the lane clone whose checkout is `root`, found by that path alone, or None. The
+    pinned `YGG_PROJECT` is searched first, then `project`, then every project's folder, so a branch name the
+    agent chose never decides where the record is looked for. Read without a lock (every record is written whole
+    by util.atomic_write). Only `kind: lane` records count: a test clone's hooks folder is empty."""
+    candidates = [os.environ.get("YGG_PROJECT"), project]
+    try:
+        candidates += sorted(os.listdir(_registry_folder("_").parent))
+    except OSError:
+        pass
+    seen = set()
+    for name in candidates:
+        if not name or name in seen or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", str(name)):
+            continue
+        seen.add(name)
+        found = _record_in(root, str(name), lane)
+        if found is not None:
+            return found
+    return None
+
+
+def _record_in(root: str, project: str, lane: str | None) -> dict | None:
+    import json
+    folder = _registry_folder(project)
+    try:
+        names = sorted(name for name in os.listdir(folder) if name.endswith(".json") and not name.startswith("."))
+    except OSError:
+        return None
+    if lane and lane + ".json" in names:
+        names.remove(lane + ".json")
+        names.insert(0, lane + ".json")  # the branch's own lane first; any other record may still own `root`
+    here = os.path.normpath(root)  # git's own top level, compared as text: nothing inside a box is resolved
+    try:
+        top = os.lstat(here)
+        identity = (top.st_dev, top.st_ino) if stat.S_ISDIR(top.st_mode) else None
+    except OSError:
+        identity = None
+    for name in names:
+        try:
+            with open(folder / name, encoding="utf-8") as handle:
+                record = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(record, dict) or record.get("kind") != "lane" or record.get("state") == "closed":
+            continue
+        path, home = record.get("path"), record.get("home")
+        if not isinstance(path, str) or not isinstance(home, str) or not os.path.isabs(home):
+            continue
+        if here in _spellings(path) or (identity is not None and _same_folder(path, identity)):
+            return dict(record, _name=name[:-len(".json")], _project=project)
+    return None
+
+
+def _same_folder(path: str, identity: tuple) -> bool:
+    """Whether the registry checkout path is the folder with `identity` (device and inode), by an `lstat` that
+    follows no link at the checkout: another spelling of the same folder (letter case, Unicode forms) is found,
+    and a checkout turned into a link never matches."""
+    try:
+        found = os.lstat(os.path.normpath(path))
+    except OSError:
+        return False
+    return stat.S_ISDIR(found.st_mode) and (found.st_dev, found.st_ino) == identity
+
+
+def _spellings(path: str) -> set:
+    """A registry checkout path `<box>/checkout` as text, and with only the folders above the box resolved (Yggdrasil's
+    own layout, as git spells its top level); the box and its checkout are never resolved (v1.1.1, invariant T)."""
+    text = os.path.normpath(path)
+    box, checkout = os.path.split(text)
+    parent, name = os.path.split(box)
+    found = {text}
+    try:
+        found.add(os.path.join(os.path.realpath(parent), name, checkout))
+    except OSError:
+        pass
+    return found
+
+
+def _map_clone(root: str, record: dict) -> None:
+    home = os.path.normpath(str(record["home"]))
+    _CLONES[root] = {"home": home, "objects": os.path.join(home, ".git", "objects"),
+                     "lane": str(record.get("_name") or "") or None, "record": record}
+
+
+def clone_home(repo) -> str | None:
+    """The registered home of `repo` when it is a registered clone this hook process mapped, else None."""
+    return (_CLONES.get(str(repo)) or {}).get("home")
+
+
+def _objects(repo) -> str | None:
+    return (_CLONES.get(str(repo)) or {}).get("objects")
+
+
+def _refs(repo) -> str:
+    """Where a fact named by a ref is read: the registered home for a mapped clone, else `repo` itself."""
+    return clone_home(repo) or repo
+
+
+def _target(args) -> str | None:
+    for index, value in enumerate(args[:-1]):
+        if value == "-C":
+            return str(args[index + 1])
+    return None
+
+
+def _git(*args, binary: bool = False, check: bool = True, objects: bool = False):
     # Yggdrasil's own git safety, keeping GIT_INDEX_FILE: a commit hook scans the index git hands it.
-    environment = util.git_env()
+    # `objects`: a call that may name a commit the home holds; in a registered clone it reads the home's objects
+    # for this one git process (v1.1.1). Everywhere else it changes nothing.
+    environment = util.git_env(home_objects=_objects(_target(args)) if objects else None)
     if os.environ.get("GIT_INDEX_FILE"):
         environment["GIT_INDEX_FILE"] = os.path.abspath(os.environ["GIT_INDEX_FILE"])
     result = subprocess.run(["git", *util.GIT_SAFETY, *map(str, args)], capture_output=True, text=not binary,
@@ -136,8 +262,8 @@ def _git(*args, binary: bool = False, check: bool = True):
     return result.stdout if check else result
 
 
-def _ok(*args) -> bool:
-    return _git(*args, check=False).returncode == 0
+def _ok(*args, objects: bool = False) -> bool:
+    return _git(*args, check=False, objects=objects).returncode == 0
 
 
 def _read(path) -> str:
@@ -164,7 +290,68 @@ def _terms_in(text: str, terms: list[str]) -> list[str]:
 
 
 def _secret(text: str) -> bool:
-    return bool(SECRET.search(text) or util.SECRET_RE.search(text))
+    return bool(SECRET.search(text) or util.has_secret(text))
+
+
+def _key_secret(text: str) -> bool:
+    """The shapes judged over a changed file's whole content: every one but the three token shapes."""
+    return bool(SECRET.search(text) or util.KEY_RE.search(text))
+
+
+TOKEN_MESSAGE = "adds a token-shaped string (a JSON Web Token, an sk- key or a refresh_token); remove it"
+
+
+# A token text longer than this is never searched for in a parent's tree; it counts as added.
+TOKEN_SEARCH_LIMIT = 65536
+
+
+def added_token_line(data: str, present) -> int | None:
+    """The line of the first token-shaped string (a JSON Web Token, a legacy `sk-` key or a `refresh_token`
+    value) in `data` that is not pre-existing, or None. `present(text, field)` tells whether the tree of a parent
+    of the commit holds that text (for a `refresh_token`, `field` is true and the text is the value alone, so
+    spacing around the field name does not count); it is called only when there is a match, so ordinary commits
+    pay nothing."""
+    for start, value, end in util.secret_spans(data, keys=False):
+        if not present(data[value:end], value != start):
+            return data.count("\n", 0, start) + 1
+    return None
+
+
+def parents_hold(repo: str, parents, objects: bool = False):
+    """A `present(text, field)` for `added_token_line`: whether the tree of any of `parents` holds `text`, so a
+    token moved, copied or reformatted from what a parent already had passes. A JSON Web Token or `sk-` key may sit
+    anywhere there; a `refresh_token` value (`field`) counts only inside a `refresh_token` field of a parent's
+    file, never as loose text. With no parent nothing does."""
+    parents = [parent for parent in parents if FULL_ID.fullmatch(str(parent))]
+    seen: dict = {}
+
+    def present(text: str, field: bool = False) -> bool:
+        if (text, field) not in seen:
+            seen[(text, field)] = bool(text) and "\n" not in text and "\0" not in text and \
+                len(text) <= TOKEN_SEARCH_LIMIT and \
+                any(_tree_holds(repo, parent, text, objects, field) for parent in parents)
+        return seen[(text, field)]
+    return present
+
+
+def _tree_holds(repo: str, commit: str, text: str, objects: bool, field: bool = False) -> bool:
+    found = _git("-C", repo, "grep", "-F", "-l", "-z", "--full-name", "--no-textconv", "-e", text, commit, "--",
+                 check=False, objects=objects)
+    if found.returncode not in (0, 1):
+        raise CheckError("git grep failed: " + util.redact(found.stderr.strip()))
+    names = [name for name in found.stdout.split("\0") if name]
+    if not field:
+        return bool(names)
+    for name in names:
+        # `name` is `<commit>:<path>` as git grep names a match in a tree.
+        blob = _git("-C", repo, "cat-file", "blob", name, binary=True, check=False, objects=objects)
+        if blob.returncode != 0:
+            raise CheckError("cannot read a file of " + commit[:12])
+        data = blob.stdout.decode("utf-8", "replace")
+        spans = util.secret_spans(data, keys=False)
+        if any(value != start and data[value:end] == text for start, value, end in spans):
+            return True
+    return False
 
 
 def touched_problem(path: str, allow_ci: bool = False, allow_hooks: bool = False,
@@ -203,10 +390,10 @@ class Rules:
     def __init__(self, repo: str, project: str | None, lane: str | None):
         self.repo, self.project, self.lane = repo, project, lane
         self.terms = denylist()
-        entry = _repo_entry(project, repo) if project else None
+        entry = _repo_entry(project, _refs(repo)) if project else None
         self.allow_ci = bool((entry or {}).get("workflow_changes"))
         self.allow_hooks = bool((entry or {}).get("hook_changes"))
-        self.hooks_path = home_hooks_path(repo)
+        self.hooks_path = home_hooks_path(_refs(repo))
         self._frozen = None
 
     def frozen(self) -> dict:
@@ -244,9 +431,12 @@ def frozen_message(path: str, package: str) -> str:
     return path + " belongs to accepted " + package + "; ask the PM to reopen " + package
 
 
-def entry_problems(repo: str, raw: str, rules: Rules, exclude=(), owns=None) -> list[str]:
-    """Problems of `git diff --raw -z` entries: touched paths, names, added content and the freeze."""
+def entry_problems(repo: str, raw: str, rules: Rules, exclude=(), owns=None, objects: bool = False,
+                   parents=()) -> list[str]:
+    """Problems of `git diff --raw -z` entries: touched paths, names, added content and the freeze. `parents`:
+    the commits whose trees hold what is already there (a token found in any of them is not added)."""
     problems = []
+    present = parents_hold(repo, parents, objects)
     fields = [f for f in raw.split("\0") if f]
     index = 0
     frozen = rules.frozen()
@@ -273,11 +463,14 @@ def entry_problems(repo: str, raw: str, rules: Rules, exclude=(), owns=None) -> 
             continue  # deleted, or a submodule commit: no content here
         if not FULL_ID.fullmatch(meta[3]):
             raise CheckError("unexpected object id " + meta[3])
-        data = _git("-C", repo, "cat-file", "blob", meta[3], binary=True).decode("utf-8", "replace")
+        data = _git("-C", repo, "cat-file", "blob", meta[3], binary=True, objects=objects).decode("utf-8", "replace")
         for term in _terms_in(data, rules.terms):
             problems.append(shown + ": content matches the denylist term " + term)
-        if _secret(data):
+        if _key_secret(data):
             problems.append(shown + ": content holds a secret-shaped token")
+        line = added_token_line(data, present)
+        if line is not None:
+            problems.append(shown + ": line " + str(line) + " " + TOKEN_MESSAGE)
         credential = None if touched else content_problem(name, data)
         if credential:
             problems.append(credential.replace(name, shown))
@@ -320,24 +513,24 @@ def _review_base(issue) -> str | None:
 
 
 def _main_ref(repo: str) -> str | None:
-    found = _git("-C", repo, "rev-parse", "--verify", "--quiet", "refs/heads/main^{commit}", check=False)
+    found = _git("-C", _refs(repo), "rev-parse", "--verify", "--quiet", "refs/heads/main^{commit}", check=False)
     return found.stdout.strip() if found.returncode == 0 and found.stdout.strip() else None
 
 
 def _is_ancestor(repo: str, older: str, newer: str) -> bool:
-    return _ok("-C", repo, "merge-base", "--is-ancestor", older, newer)
+    return _ok("-C", repo, "merge-base", "--is-ancestor", older, newer, objects=True)
 
 
 def _base_for(repo: str, issue, sha: str, others: list[str]) -> str | None:
     """A package's review base: the recorded one, else the newest of main's merge base and the lane's earlier
     accepted commits below it."""
     recorded = _review_base(issue)
-    if recorded and _ok("-C", repo, "cat-file", "-e", recorded + "^{commit}"):
+    if recorded and _ok("-C", repo, "cat-file", "-e", recorded + "^{commit}", objects=True):
         return recorded
     main = _main_ref(repo)
     candidates = []
     if main:
-        found = _git("-C", repo, "merge-base", sha, main, check=False)
+        found = _git("-C", repo, "merge-base", sha, main, check=False, objects=True)
         if found.returncode == 0 and found.stdout.strip():
             candidates.append(found.stdout.strip())
     candidates += [other for other in others if other != sha and _is_ancestor(repo, other, sha)]
@@ -355,7 +548,7 @@ def accepted_packages(project: str, repo: str) -> list[tuple[str, str | None, st
         if issue.get("state") != "accepted":
             continue
         sha = _accepted_sha(issue)
-        if sha and _ok("-C", repo, "cat-file", "-e", sha + "^{commit}"):
+        if sha and _ok("-C", repo, "cat-file", "-e", sha + "^{commit}", objects=True):
             found.append((issue.id, issue.get("lane"), sha, issue))
     return found
 
@@ -364,12 +557,17 @@ def _commit_entries(repo: str, sha: str) -> str:
     """The raw `-z` diff of one commit against its first parent (a root commit against the empty tree). A
     merge is compared with its first parent explicitly: plain diff-tree shows nothing for a merge, which would
     let a merge resolution carry a leak, a forbidden path or a frozen file past the re-check."""
-    parents = _git("-C", repo, "rev-list", "--parents", "-n", "1", sha).split()[1:]
+    parents = _git("-C", repo, "rev-list", "--parents", "-n", "1", sha, objects=True).split()[1:]
     common = ("-r", "--raw", "-z", "--no-renames", "--no-ext-diff", "--full-index", "--no-abbrev",
               "--diff-filter=ACMTD")
     if not parents:
-        return _git("-C", repo, "diff-tree", "--root", *common, sha)
-    return _git("-C", repo, "diff-tree", *common, parents[0], sha)
+        return _git("-C", repo, "diff-tree", "--root", *common, sha, objects=True)
+    return _git("-C", repo, "diff-tree", *common, parents[0], sha, objects=True)
+
+
+def _listed(output: str) -> list[tuple[str, list[str]]]:
+    """(commit, parents) of each line of `git rev-list --parents`."""
+    return [(line.split()[0], line.split()[1:]) for line in output.splitlines() if line.split()]
 
 
 def _raw_names(raw: str) -> list[str]:
@@ -396,13 +594,13 @@ def package_files(project: str, repo: str, base: str | None, sha: str) -> set:
         return set(_raw_names(_commit_entries(repo, sha)))
     syncs = recorded_syncs(project)
     in_range = [merge for merge in syncs
-                if _ok("-C", repo, "cat-file", "-e", merge + "^{commit}") and _is_ancestor(repo, merge, sha)
+                if _ok("-C", repo, "cat-file", "-e", merge + "^{commit}", objects=True) and _is_ancestor(repo, merge, sha)
                 and not _is_ancestor(repo, merge, base)]
-    main_sides = {merge: _git("-C", repo, "rev-list", "--parents", "-n", "1", merge).split()[2:3]
+    main_sides = {merge: _git("-C", repo, "rev-list", "--parents", "-n", "1", merge, objects=True).split()[2:3]
                   for merge in in_range}
     touched = set()
     excluded = ["^" + base] + ["^" + side[0] for side in main_sides.values() if side]
-    for commit in _git("-C", repo, "rev-list", sha, *excluded).split():
+    for commit in _git("-C", repo, "rev-list", sha, *excluded, objects=True).split():
         if commit not in syncs:
             touched.update(_raw_names(_commit_entries(repo, commit)))  # the lane's own commits
     if not touched:
@@ -418,7 +616,8 @@ def package_files(project: str, repo: str, base: str | None, sha: str) -> set:
         if len(top) != 1:
             return touched
         absorbed = top[0]
-    fork = _git("-C", repo, "merge-base", absorbed, base, check=False).stdout.strip() if absorbed != base else base
+    fork = _git("-C", repo, "merge-base", absorbed, base, check=False, objects=True).stdout.strip() \
+        if absorbed != base else base
     accepted, in_main = _entries(repo, sha, touched), _entries(repo, absorbed, touched)
     at_base, at_fork = _entries(repo, base, touched), (_entries(repo, fork, touched) if fork else {})
     own = set()
@@ -435,7 +634,7 @@ def _entries(repo: str, rev: str, paths) -> dict:
     if not paths:
         return found
     listed = _git("--literal-pathspecs", "-C", repo, "ls-tree", "-r", "-z", "--full-tree", rev, "--",
-                  *sorted(paths), check=False)
+                  *sorted(paths), check=False, objects=True)
     for record in (listed.stdout.split("\0") if listed.returncode == 0 else []):
         if "\t" not in record:
             continue
@@ -471,7 +670,7 @@ def frozen_owners(project: str, repo: str) -> dict:
         # package number.
         record = _acceptance(entry[3])
         seq = record.get("seq")
-        counted = _git("-C", repo, "rev-list", "--count", entry[2], check=False)
+        counted = _git("-C", repo, "rev-list", "--count", entry[2], check=False, objects=True)
         depth = int(counted.stdout.strip() or 0) if counted.returncode == 0 else 0
         return (str(record.get("at") or ""), seq is None, int(seq) if str(seq or "").isdigit() else 0,
                 depth, _package_number(entry[0]), str(entry[0]))
@@ -512,9 +711,14 @@ def _where(repo: str = ".") -> tuple[str, str | None, str | None]:
     root = top.stdout.strip() if top.returncode == 0 and top.stdout.strip() else os.path.abspath(repo)
     branch = _git("-C", root, "symbolic-ref", "--quiet", "HEAD", check=False).stdout.strip()
     match = LANE_BRANCH.match(branch)
-    if match:
-        return root, match[1], match[2]
-    return root, os.environ.get("YGG_PROJECT") or None, None
+    project, lane = (match[1], match[2]) if match else (os.environ.get("YGG_PROJECT") or None, None)
+    # A registered lane clone (v1.1.1): refs are read in its home, and its lane is the record's even when HEAD is
+    # detached. Worktree lanes have no record, so nothing changes for them.
+    record = clone_record_for(root, project, lane)
+    if record is not None:
+        _map_clone(root, record)
+        return root, str(record["_project"]), str(record["_name"])
+    return root, project, lane
 
 
 # ---------------------------------------------------------------- the hooks
@@ -536,6 +740,9 @@ def staged_problems(repo: str = ".") -> list[str]:
     lane's packages can't be read (for example after the state root is emptied, AC-96 row 2); a failed
     package lookup is then one more reason to refuse (fail closed), never a reason to skip the scan."""
     root, project, lane = _where(repo)
+    unread = clone_unread_refusal(root)
+    if unread:
+        return [unread]
     context = []
     if project and lane:
         try:
@@ -543,7 +750,8 @@ def staged_problems(repo: str = ".") -> list[str]:
             if held:
                 return [held[0] + " is being checked; commit after its verdict"]
             newest = newest_accepted(project, lane, root) if _parent_amends() else None
-            if newest is not None and not _ok("-C", root, "merge-base", "--is-ancestor", newest[1], "HEAD^"):
+            if newest is not None and not _ok("-C", root, "merge-base", "--is-ancestor", newest[1], "HEAD^",
+                                              objects=True):
                 return ["the lane must keep " + newest[0] + "'s accepted commit"]
         except (CheckError, util.YggError, OSError, ValueError) as error:
             context.append("the lane's packages can't be read: " + str(getattr(error, "message", error)))
@@ -555,7 +763,27 @@ def staged_problems(repo: str = ".") -> list[str]:
         context.append("the accepted packages can't be read: " + str(getattr(error, "message", error)))
     raw = _git("-C", root, "diff", "--cached", "--raw", "-z", "--no-renames", "--no-ext-diff", "--full-index",
                "--no-abbrev", "--diff-filter=ACMTD")
-    return entry_problems(root, raw, rules) + context
+    return entry_problems(root, raw, rules, parents=_staged_parents(root)) + context
+
+
+def _staged_parents(root: str) -> list[str]:
+    """The parents the staged commit will have: HEAD, and MERGE_HEAD while a merge is in progress."""
+    parents = []
+    for name in ("HEAD", "MERGE_HEAD"):
+        found = _git("-C", root, "rev-parse", "--verify", "--quiet", name + "^{commit}", check=False)
+        if found.returncode == 0 and FULL_ID.fullmatch(found.stdout.strip()):
+            parents.append(found.stdout.strip())
+    return parents
+
+
+def clone_unread_refusal(root: str) -> str | None:
+    """In a registered clone, pre-commit and pre-push refuse while the node has unread mail, with the Claude
+    guard's text: Codex has no PreToolUse hook to do it (v1.1.1). None elsewhere."""
+    node = util.current_node()
+    if not clone_home(root) or not node:
+        return None
+    from . import hooks
+    return hooks.unread_refusal(node, hooks.unread_counts(node, util.env("YGG_ACTIVATION")))
 
 
 def message_problems(path: str) -> list[str]:
@@ -581,9 +809,15 @@ def transaction_problems(lines: str, repo: str = ".") -> list[str]:
         if not match or not ref.startswith("refs/heads/"):
             continue
         from . import lanedrop
-        back = lanedrop.history_problem(match[1], root, new)  # A11.1 AC-12
+        back = lanedrop.history_problem(match[1], root, new, home_objects=_objects(root))  # A11.1 AC-12
         if back:
             problems.append(back)
+        mapped = _CLONES.get(str(root)) or {}
+        if mapped and new != ZERO:
+            # In a clone, `--no-verify` skips pre-commit and commit-msg but not this hook: the lane check runs
+            # over the commits the move adds (v1.1.1), under the record's own project and lane.
+            problems += added_commit_problems(root, str(mapped["record"].get("_project") or match[1]),
+                                              str(mapped.get("lane") or match[2]), parts[0], new)
         newest = newest_accepted(match[1], match[2], root)
         if newest is None:
             continue
@@ -593,21 +827,88 @@ def transaction_problems(lines: str, repo: str = ".") -> list[str]:
     return problems
 
 
-def range_problems(repo: str, base: str, tip: str, allow_ci: bool = False) -> list[str]:
-    """The lane check on every commit in base..tip, for the push guard: a commit whose hooks were skipped
-    still can't reach the remote."""
-    _, project, lane = _where(repo)
-    rules = Rules(repo, project, lane)
-    rules.allow_ci = rules.allow_ci or allow_ci
-    rules._frozen = {}  # the freeze holds at commit time and at the trusted re-check
+def added_commit_problems(root: str, project: str, lane: str, old: str, new: str) -> list[str]:
+    """The lane check over the commits a lane-branch move in a registered clone adds: those not reachable from
+    the old value or from what the home already holds (its lane head and main), each against the staged-change
+    rules, the freeze and the message rules."""
+    home = clone_home(root)
+    excluded = [] if old == ZERO else [old]
+    branch = "refs/heads/ygg/" + project + "/lane/" + lane
+    for ref in (branch, "refs/heads/main"):
+        found = _git("-C", home, "rev-parse", "--verify", "--quiet", ref + "^{commit}", check=False)
+        if found.returncode == 0 and FULL_ID.fullmatch(found.stdout.strip()):
+            excluded.append(found.stdout.strip())
+    rules = Rules(root, project, lane)
     problems = []
-    for sha in _git("-C", repo, "rev-list", base + ".." + tip).split():
-        raw = _git("-C", repo, "diff-tree", "-r", "-m", "--root", "--raw", "-z", "--no-renames", "--no-ext-diff",
-                   "--full-index", "--no-abbrev", "--diff-filter=ACMTD", sha)
-        found = entry_problems(repo, raw, rules)
-        found += text_problems(_git("-C", repo, "log", "-1", "--format=%B", sha), rules.terms)
+    listed = _git("-C", root, "rev-list", "--parents", new, "--not", *excluded, objects=True)
+    for sha, parents in _listed(listed):
+        found = entry_problems(root, _commit_entries(root, sha), rules, objects=True, parents=parents)
+        found += text_problems(_git("-C", root, "log", "-1", "--format=%B", sha, objects=True), rules.terms)
         problems += [sha[:12] + ": " + problem for problem in found]
     return problems
+
+
+def range_problems(repo: str, base: str, tip: str, allow_ci: bool = False,
+                   project: str | None = None) -> list[str]:
+    """The lane check on every commit in base..tip, for the push guard: a commit whose hooks were skipped
+    still can't reach the remote. What the home already trusts is left out, as at the re-check: the commits of
+    a main that a recorded lane sync merged, and of a recorded sync merge all but what it holds beyond
+    re-merging its parents. `project`: the project the pushed branch names, whose syncs count (else the
+    checkout's)."""
+    _, found_project, lane = _where(repo)
+    rules = Rules(repo, found_project, lane)
+    rules.allow_ci = rules.allow_ci or allow_ci
+    rules._frozen = {}  # the freeze holds at commit time and at the trusted re-check
+    syncs = _syncs_or_none(project or found_project)
+    home_main = _home_main(repo)
+    trusted = []  # recorded mains that the home's own main holds
+    for record in syncs.values():
+        main = _recorded_main(record)
+        if home_main and main and main not in trusted and \
+                _ok("-C", repo, "cat-file", "-e", main + "^{commit}", objects=True) and \
+                (main == home_main or
+                 _ok("-C", repo, "merge-base", "--is-ancestor", main, home_main, objects=True)):
+            trusted.append(main)
+    problems = []
+    listed = _git("-C", repo, "rev-list", "--parents", base + ".." + tip, *["^" + main for main in trusted],
+                  objects=True)
+    for sha, parents in _listed(listed):
+        main = _recorded_main(syncs.get(sha))
+        if len(parents) == 2 and main in trusted and main in parents:
+            extra = _sync_extra(repo, sha, objects=True)
+            found = entry_problems(repo, extra, rules, objects=True, parents=parents) if extra is not None else \
+                ["a recorded sync merge can't be re-merged"]
+        else:
+            raw = _git("-C", repo, "diff-tree", "-r", "-m", "--root", "--raw", "-z", "--no-renames",
+                       "--no-ext-diff", "--full-index", "--no-abbrev", "--diff-filter=ACMTD", sha, objects=True)
+            found = entry_problems(repo, raw, rules, objects=True, parents=parents)
+            found += text_problems(_git("-C", repo, "log", "-1", "--format=%B", sha, objects=True), rules.terms)
+        problems += [sha[:12] + ": " + problem for problem in found]
+    return problems
+
+
+def _recorded_main(record) -> str:
+    main = str(record.get("main") or "") if isinstance(record, dict) else ""
+    return main if FULL_ID.fullmatch(main) else ""
+
+
+def _home_main(repo: str) -> str:
+    """The commit the home's own main names (a registered clone reads its home), or "" when there is none."""
+    found = _git("-C", _refs(repo), "rev-parse", "--verify", "--quiet", "refs/heads/main^{commit}", check=False)
+    sha = found.stdout.strip() if found.returncode == 0 else ""
+    return sha if FULL_ID.fullmatch(sha) else ""
+
+
+def _syncs_or_none(project: str | None) -> dict:
+    """The project's recorded lane syncs; none when there is no project or they can't be read, so everything in
+    the range is judged."""
+    if not project:
+        return {}
+    try:
+        syncs = recorded_syncs(project)
+    except (util.YggError, OSError, ValueError):
+        return {}
+    return syncs if isinstance(syncs, dict) else {}
 
 
 # ---------------------------------------------------------------- the trusted re-check (D5)
@@ -643,20 +944,21 @@ def _identity_problems(repo: str, sha: str) -> list[str]:
     return problems
 
 
-def _sync_extra(repo: str, sha: str) -> str | None:
+def _sync_extra(repo: str, sha: str, objects: bool = False) -> str | None:
     """For a recorded sync merge: the raw diff of what it holds beyond re-merging its two parents."""
-    parents = _git("-C", repo, "rev-list", "--parents", "-n", "1", sha).split()[1:]
+    parents = _git("-C", repo, "rev-list", "--parents", "-n", "1", sha, objects=objects).split()[1:]
     if len(parents) != 2:
         return None
-    merged = _git("-C", repo, "merge-tree", "--write-tree", parents[0], parents[1], check=False)
+    merged = _git("-C", repo, "merge-tree", "--write-tree", parents[0], parents[1], check=False, objects=objects)
     tree = merged.stdout.split("\n", 1)[0].strip() if merged.returncode == 0 else ""
     if not tree:
         return None
     return _git("-C", repo, "diff-tree", "-r", "--raw", "-z", "--no-renames", "--no-ext-diff", "--full-index",
-                "--no-abbrev", "--diff-filter=ACMTD", tree, sha + "^{tree}")
+                "--no-abbrev", "--diff-filter=ACMTD", tree, sha + "^{tree}", objects=objects)
 
 
-def recheck_problems(project: str, lane: str, repo: str, packages, head: str | None = None) -> list[str]:
+def recheck_problems(project: str, lane: str, repo: str, packages, head: str | None = None,
+                     since: str | None = None) -> list[str]:
     """The lane check again, with Yggdrasil's own git, over a package's commits: those from the review base to
     the lane head that main doesn't hold. A recorded sync merge counts only for what it holds beyond its two
     parents, so main's own commits never count against a package (D5)."""
@@ -685,23 +987,24 @@ def recheck_problems(project: str, lane: str, repo: str, packages, head: str | N
             if recorded and _ok("-C", repo, "cat-file", "-e", recorded + "^{commit}") and \
                     _is_ancestor(repo, recorded, head):
                 bases.append(recorded)
-    excluded = [main] if main else []
-    listed = _git("-C", repo, "rev-list", head, *["^" + base for base in bases + excluded])
+    excluded = ([main] if main else []) + ([since] if since else [])  # since: the receive step's L0 (v1.1.1)
+    listed = _git("-C", repo, "rev-list", "--parents", head, *["^" + base for base in bases + excluded])
     syncs = recorded_syncs(project)
     dropped = lanedrop.dropped_commits(project)
-    for sha in listed.split():
+    for sha, parents in _listed(listed):
         if sha in dropped:
             continue  # already named by the history check above
         if sha in syncs:
             extra = _sync_extra(repo, sha)
             found = entry_problems(repo, extra, rules, owns=lambda owner, sha=sha: _is_ancestor(
-                repo, sha, owner_shas[owner])) if extra is not None else \
+                repo, sha, owner_shas[owner]), parents=parents) if extra is not None else \
                 ["a recorded sync merge can't be re-merged"]
         else:
             # A change to an accepted package's file counts unless the commit is in that package's accepted
             # history, whichever packages the caller names (AC-85 row 3, AC-93 row 3).
             found = entry_problems(repo, _commit_entries(repo, sha), rules,
-                                   owns=lambda owner, sha=sha: _is_ancestor(repo, sha, owner_shas[owner]))
+                                   owns=lambda owner, sha=sha: _is_ancestor(repo, sha, owner_shas[owner]),
+                                   parents=parents)
             found += text_problems(_git("-C", repo, "log", "-1", "--format=%B", sha), rules.terms)
             found += _identity_problems(repo, sha)
         problems += [sha[:12] + ": " + problem for problem in found]
@@ -788,6 +1091,10 @@ def main(arguments: list[str]) -> int:
     if hook == "pre-push":
         from . import gitops
         root, _, _ = _where(".")
+        unread = clone_unread_refusal(root)
+        if unread:
+            print("DENIED: " + unread, file=sys.stderr)
+            return 1
         code, message = gitops.push_guard(root, rest[0] if rest else "origin", sys.stdin.read(),
                                           rest[1] if len(rest) > 1 else None)
         if message:

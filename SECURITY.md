@@ -13,6 +13,7 @@ This version's guards are accident guards, not containment. Its threat model and
 - a guard or check behaving differently from what [docs/security.md](docs/security.md) says;
 - a way for an agent session to run a command reserved for the user through `ygg` itself while its session markers are still set;
 - a push the push check should refuse that it allows;
+- a Codex builder writing outside its box, changing another lane or the home's git folder, or running a `ygg` command its relay does not allow;
 - a secret reaching a tracker record, message or log that the docs say is redacted;
 - anything in this repository that should not be public.
 

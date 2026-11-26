@@ -8,7 +8,7 @@ from yggdrasil.util import YggError
 
 
 KEYS = ["t3_bin", "alert_command", "merge_check_path", "agent_claude_config_dir", "linear_token_store",
-        "linear_token_file", "linear_keychain_service"]
+        "linear_token_file", "linear_keychain_service", "agent_codex_login_dir"]
 
 
 def _clear():

@@ -19,9 +19,72 @@ STANDARD_VERSION = 1
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 RESERVED_IDS = {"l1", "user"}
 # Known credential shapes (best effort): Linear, Anthropic, OpenAI project, service and admin keys, GitHub
-# tokens of every kind, AWS access key ids and Slack tokens.
-SECRET_RE = re.compile(r"(?:lin_api_|lin_oauth_|sk-(?:ant|proj|svcacct|admin)-|gh[opsur]_|github_pat_)[A-Za-z0-9_\-]*"
-                       r"|(?:AKIA|ASIA)[A-Z0-9]{16}|xox[abposr]-[A-Za-z0-9-]+")
+# tokens of every kind, AWS access key ids and Slack tokens; and the shapes a copied Codex login holds: JSON Web
+# Tokens (`eyJ` with two dot-separated base64url parts of at least 10 characters each, the three-part form and
+# the two-part reading both caught), legacy OpenAI keys (`sk-` and at least 32 letters and digits) and a JSON
+# `refresh_token` value of at least 20 characters (escaped JSON included; only the value is redacted).
+_KEY_SHAPES = (r"(?:lin_api_|lin_oauth_|sk-(?:ant|proj|svcacct|admin)-|gh[opsur]_|github_pat_)[A-Za-z0-9_\-]*"
+               r"|(?:AKIA|ASIA)[A-Z0-9]{16}|xox[abposr]-[A-Za-z0-9-]+")
+_TOKEN_SHAPES = (r"(?<![A-Za-z0-9])sk-[A-Za-z0-9]{32,}"
+                 r'|(?P<refresh>\\?"refresh_token\\?"\s*:\s*\\?")[^"\\]{20,}')
+# The key shapes alone: the lane check judges a changed file's whole content by them. JSON Web Tokens are found
+# by `_jwt_from` rather than a pattern: as a pattern, a long run of `eyJ` with no dot takes quadratic time.
+KEY_RE = re.compile(_KEY_SHAPES)
+_SHAPES = {(True, True): re.compile(_KEY_SHAPES + "|" + _TOKEN_SHAPES), (True, False): KEY_RE,
+           (False, True): re.compile(_TOKEN_SHAPES)}
+_JWT_RUN = re.compile(r"[A-Za-z0-9_-]*")
+
+
+def _jwt_from(text: str, pos: int) -> tuple[int, int] | None:
+    r"""(start, end) of the first JSON Web Token at or after `pos`, the same match the patterns
+    `eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}` give,
+    in linear time. Within one run of token characters only the first `eyJ` can start a match: both readings take
+    the rest of the run up to the dot, and a later `eyJ` leaves fewer characters before it."""
+    while True:
+        start = text.find("eyJ", pos)
+        if start < 0:
+            return None
+        first = _JWT_RUN.match(text, start).end()
+        if text.startswith(".", first):
+            second = _JWT_RUN.match(text, first + 1).end()
+            if second - first - 1 >= 10:
+                if text.startswith(".", second):
+                    third = _JWT_RUN.match(text, second + 1).end()
+                    if third - second - 1 >= 10:
+                        return start, third
+                if first - start >= 13:
+                    return start, second
+        pos = first
+
+
+def secret_spans(text: str, keys: bool = True, tokens: bool = True):
+    """Each secret-shaped string in `text`, left to right and not overlapping, as (start, value start, end): the
+    value starts after the field name for a `refresh_token`, else at the start. `keys`: the key shapes; `tokens`:
+    the three token shapes."""
+    pattern = _SHAPES[(keys, tokens)]
+    pos, size = 0, len(text)
+    found = jwt = None
+    found_done, jwt_done = False, not tokens
+    while pos <= size:
+        if not found_done and (found is None or found.start() < pos):
+            found = pattern.search(text, pos)
+            found_done = found is None
+        if not jwt_done and (jwt is None or jwt[0] < pos):
+            jwt = _jwt_from(text, pos)
+            jwt_done = jwt is None
+        if found_done and jwt_done:
+            return
+        if not found_done and (jwt_done or found.start() <= jwt[0]):
+            refresh = found.groupdict().get("refresh")
+            yield found.start(), found.end("refresh") if refresh is not None else found.start(), found.end()
+            pos = found.end()
+        else:
+            yield jwt[0], jwt[0], jwt[1]
+            pos = jwt[1]
+
+
+def has_secret(text: str, keys: bool = True, tokens: bool = True) -> bool:
+    return next(secret_spans(text, keys, tokens), None) is not None
 
 EXIT_USAGE = 1
 EXIT_HOOK_DENY = 2
@@ -362,7 +425,12 @@ def check_id(value: str, what: str = "identifier", *, allow_reserved: bool = Fal
 
 
 def redact(text: str) -> str:
-    return SECRET_RE.sub("[REDACTED]", text or "")
+    text = text or ""
+    parts, last = [], 0
+    for _start, value, end in secret_spans(text):
+        parts += [text[last:value], "[REDACTED]"]
+        last = end
+    return "".join(parts) + text[last:]
 
 
 SECRET_KEY_RE = re.compile(r"(secret|token|password|passwd|credential|api_key|apikey|private_key)", re.I)
@@ -674,27 +742,82 @@ def trusted_global_config() -> str:
     return target
 
 
-def git_env() -> dict:
+_WRITE_FREE: dict = {}
+
+
+def write_free(on: bool = True) -> None:
+    """Make this process's git environment write-free (v1.1.1): the tender calls it before any git runs. A
+    process under `YGG_RELAY` (a Codex agent's own hooks) is write-free without it."""
+    _WRITE_FREE["on"] = bool(on)
+
+
+def is_write_free() -> bool:
+    return bool(_WRITE_FREE.get("on")) or bool(os.environ.get("YGG_RELAY"))
+
+
+def existing_global_config() -> str:
+    """The trusted global config path when the file already exists, else /dev/null. It never writes and never
+    makes the state root: inside the Codex sandbox the state root is read-only, and the launcher writes the
+    file before any agent or helper starts."""
+    base = env("YGG_STATE_ROOT") or _configured("state_root") or str(Path.home() / ".local" / "state" / "yggdrasil")
+    target = Path(base) / "git" / "global.gitconfig"
+    try:
+        return str(target) if target.is_file() else os.devnull
+    except OSError:
+        return os.devnull
+
+
+def c_quoted(path: str) -> str:
+    """`path` as one entry of GIT_ALTERNATE_OBJECT_DIRECTORIES: as it is, or C-quoted when it holds a colon, a
+    double quote, a backslash at the start or a control character (git reads an entry that begins with a
+    double quote as a C-style quoted path)."""
+    text = str(path)
+    if not any(ch in text for ch in ':"') and not text.startswith("\\") and \
+            not any(ord(ch) < 32 or ord(ch) == 127 for ch in text):
+        return text
+    out = []
+    for ch in text:
+        if ch in '"\\':
+            out.append("\\" + ch)
+        elif ch == "\n":
+            out.append("\\n")
+        elif ch == "\t":
+            out.append("\\t")
+        elif ord(ch) < 32 or ord(ch) == 127:
+            out.append("\\%03o" % ord(ch))
+        else:
+            out.append(ch)
+    return '"' + "".join(out) + '"'
+
+
+def git_env(home_objects: str | None = None) -> dict:
+    """Yggdrasil's git environment. `home_objects` (v1.1.1, a commit-time hook in a registered clone only): the
+    registered home's object folder, which this one git process may read through GIT_ALTERNATE_OBJECT_DIRECTORIES
+    and never writes. It is set after the filter, so an inherited value never survives."""
     environment = {k: v for k, v in os.environ.items()
                    if k not in GIT_SELECTION and k not in GIT_PROGRAMS
                    and not k.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))}
     # Replacement refs could make a commit look like another; Yggdrasil always reads the real objects.
     environment["GIT_NO_REPLACE_OBJECTS"] = "1"
     environment["GIT_CONFIG_NOSYSTEM"] = "1"
-    environment["GIT_CONFIG_GLOBAL"] = trusted_global_config()
+    environment["GIT_CONFIG_GLOBAL"] = existing_global_config() if is_write_free() else trusted_global_config()
     # No transport of any kind, no lazy fetch, no user-chosen protocol.
     environment["GIT_ALLOW_PROTOCOL"] = ""
     environment["GIT_PROTOCOL_FROM_USER"] = "0"
     environment["GIT_NO_LAZY_FETCH"] = "1"
+    if home_objects is not None:
+        if not os.path.isabs(str(home_objects)):
+            raise ValueError("home_objects must be an absolute path")
+        environment["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = c_quoted(str(home_objects))
     return environment
 
 
-def trusted_git(*args, check: bool = False):
+def trusted_git(*args, check: bool = False, home_objects: str | None = None):
     """Every git call Yggdrasil makes itself: programs the config could name are forced off, no repository
     selection variables, no replace refs, no system config and only Yggdrasil's own global config."""
     import subprocess
     return subprocess.run(["git", *GIT_SAFETY, *map(str, args)], capture_output=True, text=True, check=check,
-                          env=git_env())
+                          env=git_env(home_objects=home_objects))
 
 
 # The only repository, worktree and global config keys Yggdrasil's own git calls accept. Anything else,

@@ -1,7 +1,9 @@
 """`ygg doctor [--json]` (A11 lane 4: AC-24; release switch `doctor`).
 
 Says which tracker and launcher are active and which of the built-in options are ready, with a reason when one
-isn't, and whether the lane check has a leak denylist. Read-only: it makes no network call and raises no alert.
+isn't, whether the lane check has a leak denylist, and how a Codex session would sign in (`codex_sign_in`, from the
+environment that session would get; never a key or a token). Read-only: it makes no network call and raises no
+alert.
 """
 
 from __future__ import annotations
@@ -45,13 +47,14 @@ def _option(name: str, ready: bool, reason: str) -> dict:
 
 
 def report() -> dict:
-    from . import tracker
+    from . import codexsignin, tracker
     trackers = [_option("files", True, ""), _option("linear", *_linear_ready())]
     launchers = [_option("headless", True, ""), _option("t3", *_t3_ready())]
     denylist = config.get("leak_denylist") or (config.profile() or {}).get("leak_denylist")
     return {"tracker": {"active": tracker.selected(), "options": trackers},
             "launcher": {"active": str(config.get("launcher", "headless") or "headless"), "options": launchers},
-            "leak_check": {"denylist": util.redact(str(util.redact_profile(denylist))) if denylist else None}}
+            "leak_check": {"denylist": util.redact(str(util.redact_profile(denylist))) if denylist else None},
+            "codex_sign_in": codexsignin.doctor_report()}
 
 
 def show(as_json: bool) -> str:
@@ -69,4 +72,7 @@ def show(as_json: bool) -> str:
         lines.append("Leak check: denylist " + data["leak_check"]["denylist"] + ".")
     else:
         lines.append(DENYLIST_MISSING)
+    lines.append("codex sign-in: " + data["codex_sign_in"]["route"])
+    if data["codex_sign_in"]["detail"]:
+        lines.append("  " + data["codex_sign_in"]["detail"])
     return "\n".join(lines) + "\n"

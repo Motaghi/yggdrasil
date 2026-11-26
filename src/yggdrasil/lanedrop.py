@@ -98,9 +98,12 @@ def record(project: str, plan: dict) -> str:
     identifier = "drop-" + uuid.uuid4().hex[:12]
     with util.locked():
         data = _load(project)
-        data["drops"].append({"id": identifier, "packages": list(plan["packages"]), "lane": plan["lane"],
-                              "head": plan["head"], "drop_point": plan["drop_point"],
-                              "commits": list(plan["dropped"]), "at": util.iso(), "completed_at": None})
+        entry = {"id": identifier, "packages": list(plan["packages"]), "lane": plan["lane"],
+                 "head": plan["head"], "drop_point": plan["drop_point"],
+                 "commits": list(plan["dropped"]), "at": util.iso(), "completed_at": None}
+        if plan.get("clone_generation") is not None:
+            entry["clone_generation"] = int(plan["clone_generation"])  # the box a clone lane's cancel quarantines
+        data["drops"].append(entry)
         _save(project, data)
     return identifier
 
@@ -126,17 +129,17 @@ def complete(project: str, identifier: str) -> None:
 
 # ---------------------------------------------------------------- git
 
-def _git(repo, *args):
-    return util.trusted_git("-C", repo, *args)
+def _git(repo, *args, home_objects: str | None = None):
+    return util.trusted_git("-C", repo, *args, home_objects=home_objects)
 
 
-def _rev(repo, ref: str) -> str | None:
-    found = _git(repo, "rev-parse", "--verify", "--quiet", ref + "^{commit}")
+def _rev(repo, ref: str, home_objects: str | None = None) -> str | None:
+    found = _git(repo, "rev-parse", "--verify", "--quiet", ref + "^{commit}", home_objects=home_objects)
     return found.stdout.strip() if found.returncode == 0 and found.stdout.strip() else None
 
 
-def _ancestor(repo, older: str, newer: str) -> bool:
-    return _git(repo, "merge-base", "--is-ancestor", older, newer).returncode == 0
+def _ancestor(repo, older: str, newer: str, home_objects: str | None = None) -> bool:
+    return _git(repo, "merge-base", "--is-ancestor", older, newer, home_objects=home_objects).returncode == 0
 
 
 def _parents(repo, sha: str) -> list[str]:
@@ -261,12 +264,12 @@ def summary(plan_: dict) -> str:
 
 # ---------------------------------------------------------------- the history guard (AC-12)
 
-def history_problem(project: str, repo, new: str) -> str | None:
+def history_problem(project: str, repo, new: str, home_objects: str | None = None) -> str | None:
     """Refuse a lane ref move to a commit that has a recorded dropped commit as an ancestor (the commit itself
-    counts)."""
+    counts). `home_objects`: in a registered clone's hook, the home's object folder for these git calls (v1.1.1)."""
     if not new or set(new) == {"0"}:
         return None
     for sha, packages in dropped_commits(project).items():
-        if _rev(repo, sha) and _ancestor(repo, sha, new):
+        if _rev(repo, sha, home_objects) and _ancestor(repo, sha, new, home_objects):
             return GO_BACK + packages
     return None

@@ -92,9 +92,8 @@ def test_ac99_row1_codex_roles(a11, layer):
         assert 'claude-opus-5-5' in launches[0]['argv']
         return
     result = a11.run('pid', 'approve', 'alpha-p1')
-    assert result.returncode == (0 if layer == 'reviewer-only' else 3)
-    if layer != 'reviewer-only':
-        assert 'Codex builds are not in this release' in result.stderr
+    assert result.returncode == 0
+    assert 'Codex builds' not in result.stderr
 
 
 @pytest.mark.ac('AC-99')
@@ -112,15 +111,18 @@ def test_ac99_row2_later_codex_overrides(a11, run):
         a11.package('WP-1', criteria=True)
         a11.set_package_config(models={'model': 'gpt-6.1-sol'})
         result = a11.run('wp', 'authorise', 'alpha-p1', '--package', 'WP-1', '--lane', 'pm1tl1')
-    assert result.returncode == 3
-    assert 'Codex builds are not in this release' in result.stderr
+    assert result.returncode == (3 if run == 'package' else 0)
+    if run == 'package':
+        assert "WP-1 would run on Codex but lane ygg/alpha-p1/lane/pm1tl1 runs on Claude Code; a lane's team lead and workers use one runtime" in result.stderr
     if run == 'launch':
+        a11.wait_exit('pm1tl1')
+        before = len([call for call in a11.launches('pm1tl1') if call['binary'] == 'codex'])
         a11.send(10)
         a11.tick()
-        assert a11.calls('codex') == []
-        assert len([alert for alert in a11.alerts('ygg-launch-refused') if alert.get('node') == 'pm1tl1']) == 1
+        assert len([call for call in a11.launches('pm1tl1') if call['binary'] == 'codex']) == before + 1
+        assert [alert for alert in a11.alerts('ygg-launch-refused') if alert.get('node') == 'pm1tl1'] == []
     elif run == 'node-add':
-        assert a11.node('pm1tl1w9') is None
+        assert a11.node('pm1tl1w9') is not None
     else:
         assert present(a11.wp())['state'] == 'planned'
 

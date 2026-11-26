@@ -1,7 +1,7 @@
 """The demo's scripted agent: the `claude` and `codex` the conductor starts in a demo.
 
-It reads its node from `YGG_NODE` and runs that node's steps (script.STEPS) with `ygg` and `git`, the way the
-pilot replay's fake agents do. It never calls a model and never opens a network connection.
+It reads its node from `YGG_NODE` and runs that node's steps (script.STEPS) with `ygg` and `git`. It never
+calls a model and never opens a network connection.
 """
 
 from __future__ import annotations

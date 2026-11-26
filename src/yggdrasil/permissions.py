@@ -246,9 +246,27 @@ def hold_reason(node: dict) -> str | None:
         return None
     if cli != "claude-code":
         return None
+    if _lane_runs_elsewhere(node, cli):
+        return None
     # The agreement first (on either route: a T3 launch is checked the same way), then whether the agreed rules
     # can be written for the node.
     return refusal(node.get("programme")) or rule_problem(node, cli)
+
+
+def _lane_runs_elsewhere(node: dict, cli: str) -> bool:
+    """Whether `node` works in a lane whose recorded runtime is not `cli` (CB-D6). Its launch is refused for the
+    runtime before any permission rule is written, and a Codex lane's working folder is a clone box, which trusted
+    code never resolves (invariant T), so no permission path is calculated for it. Read from the lane's record
+    and the state root only; an unreadable answer counts as elsewhere, so the box is never resolved."""
+    from . import launcher, state
+    try:
+        nodes = state.all_nodes()
+        owner = launcher.lane_owner_of(node, nodes)
+        if owner is None or not node.get("project"):
+            return False
+        return launcher.lane_runtime(owner, nodes) != cli
+    except (util.YggError, OSError, KeyError, TypeError, ValueError):
+        return True
 
 
 def rule_problem(node: dict, cli: str) -> str | None:

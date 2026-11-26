@@ -62,18 +62,23 @@ def commit(node_id: str, activation: str, phase: str, **fields) -> bool:
     """Commit one lifecycle fact under the journal lock. A terminal fact for an activation that already has
     one is rejected (returns False); so is a `spawned` after a terminal fact. The record's `terminal` mirror
     is written after the fact commits."""
-    from . import journal, launcher
+    from . import codexlaunch, journal, launcher
     programme = _programme(node_id)
     with util.locked():
         found = facts(programme, activation)
         done = terminal_of(found)
         if done is not None and (phase in TERMINAL or phase == "spawned"):
+            if phase in TERMINAL:
+                codexlaunch.drop_links(activation)  # settled already: no live link to the login stays
             return False
         if phase == "spawned":
             faults.barrier("in-journal-write", node_id, activation)
         journal.add(programme, "activation", key=activation, node=node_id, phase=phase, **fields)
         if phase in TERMINAL:
             launcher.update_receipt(activation, terminal=phase)
+            # Every settlement path (the supervisor's end, the conductor's, an orphaned reservation, a reset, a
+            # release) commits a terminal fact: the Codex home's links to the shared login go with it.
+            codexlaunch.drop_links(activation)
     return True
 
 
@@ -83,6 +88,9 @@ def mirror_terminal(node_id: str, activation: str) -> str | None:
     done = terminal_of(facts(_programme(node_id), activation))
     if done and launcher.receipt(activation).get("terminal") != done:
         launcher.update_receipt(activation, terminal=done)
+    if done:
+        from . import codexlaunch
+        codexlaunch.drop_links(activation)  # a process that committed the fact may have stopped before this
     return done
 
 
@@ -518,6 +526,11 @@ def settle(node_id: str, activation: str, data: dict, found: list[dict]) -> str:
         return "exited"  # the exit record settles it (classified by the receipt path)
     agent = evidence(data.get("pid"), recorded_start(data)) if data.get("pid") is not None else None
     if agent == "alive":
+        if data.get("codex_login_links"):
+            # A supervisor that died after recording its agent took the sign-in lease with it: a holder takes it
+            # again (at most one per activation; a live supervisor or holder keeps the holder lock).
+            from . import codexlaunch
+            codexlaunch.ensure_lease_holder(activation, data, data.get("pid"), recorded_start(data))
         return "running"
     if agent == "unknown":
         return "unknown"
@@ -553,6 +566,10 @@ def settle(node_id: str, activation: str, data: dict, found: list[dict]) -> str:
                 record = launcher.receipt(activation)
                 record.update(fields)
                 launcher.save_receipt(activation, record, scope={})
+            if data.get("codex_login_links"):
+                # The dead supervisor's sign-in lease went with it; the adopted agent's is taken again.
+                from . import codexlaunch
+                codexlaunch.ensure_lease_holder(activation, data, live[0], fields["process_started_at"])
             return "running"
     return "unsettled"
 

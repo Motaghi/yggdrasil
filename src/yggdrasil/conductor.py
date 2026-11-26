@@ -406,6 +406,8 @@ def reconcile() -> None:
     through the same finalize step confirm uses, journal first.
     """
     launcher.finish_aborts()  # interrupted aborts are completed whatever the runtime now says
+    from . import relay
+    relay.recover()  # v1.1.1: relay folders of a supervisor that is gone are archived, never replayed
     nodes = state.all_nodes()
     settle_orphaned_reservations(nodes)
     for node_id in nodes:
@@ -730,8 +732,12 @@ def tick() -> dict:
     _, relaunch = heimdall_scan()  # reconciles first
     from . import t3
     t3.finish_closes()  # closed lanes whose T3 project or worktree could not go yet
+    from . import quarantine
+    quarantine.tick_step()  # v1.1.1: at most one clone-lane quarantine (cleanup or recovery) per tick
     from . import events
     events.tick()
+    from . import clones
+    clones.sweep_test_clones()  # v1.1.1: test clones of settled activations are removed (invariant T rule 3)
     seams.run_steps(BEFORE_LAUNCH_STEPS)
     from . import cancel
     cancel.step()  # A11.1 AC-13: one ygg-cancel-interrupted alert per interrupted cancel

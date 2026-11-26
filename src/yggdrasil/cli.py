@@ -162,6 +162,7 @@ def build() -> Parser:
 
     p = sub.add_parser("launch"); p.add_argument("node")
     p = sub.add_parser("_supervise"); p.add_argument("activation")
+    p = sub.add_parser("_tend"); p.add_argument("mode"); p.add_argument("spec")  # v1.1.1: inside a lane box
 
     test = group("test")
     p = test.add_parser("set-next"); p.add_argument("kind"); p.add_argument("number", type=int)
@@ -190,6 +191,14 @@ def build() -> Parser:
     p.add_argument("--programme")
     agents.add_parser("revoke", help="withdraw your agreement (user-only)")
     agents.add_parser("revoke-minimal", help="the older name of revoke (user-only)")
+
+    codex = group("codex")  # Yggdrasil's own Codex sign-in, user-only
+    p = codex.add_parser("login", help="sign Codex agents in through Codex (user-only)")
+    flag = p.add_mutually_exclusive_group()
+    flag.add_argument("--device-auth", dest="flag", action="store_const", const="--device-auth")
+    flag.add_argument("--with-api-key", dest="flag", action="store_const", const="--with-api-key")
+    codex.add_parser("status", help="show the Codex agents' sign-in (user-only)")
+    codex.add_parser("logout", help="sign Codex agents out (user-only)")
 
     envelope = group("envelope")
     p = envelope.add_parser("grant"); p.add_argument("scope"); p.add_argument("--until"); p.add_argument("--through-stage")
@@ -329,6 +338,8 @@ def dispatch(args) -> tuple[int, str]:
         if action == "approve":
             return 0, commands.stage_approve(args.project)
         return 0, commands.stage_reject(args.project, args.note)
+    if command == "wp" and action in ("ready", "complete") and util.env("YGG_VIA_RELAY"):
+        _relayed_unread_check()
     if command == "wp":
         if action == "authorise":
             return 0, commands.wp_authorise(args.project, args.package, args.lane)
@@ -339,6 +350,7 @@ def dispatch(args) -> tuple[int, str]:
             try:
                 return 0, cancel.cancel(args.project, list(args.package or []), args.finish, args.yes)
             except cancel.PreviewRefusal as preview:
+                print(preview.message, file=sys.stderr)  # names the code after --yes; the listing goes to stdout
                 return util.EXIT_REFUSED, preview.stdout
         if action == "reopen":
             return 0, commands.wp_reopen(args.project, args.package)
@@ -424,6 +436,9 @@ def dispatch(args) -> tuple[int, str]:
     if command == "_supervise":
         from . import launcher
         return launcher.supervise(args.activation), ""
+    if command == "_tend":
+        from . import tender
+        return tender.main(args.mode, args.spec), ""
     if command == "test":
         from . import testmode
         if action == "cancel":
@@ -481,6 +496,10 @@ def dispatch(args) -> tuple[int, str]:
         return gitops.main_push_guard(args.repo, args.remote, args.url), ""
     if command == "merge":
         from . import gitops
+        if args.repo is not None and util.env("YGG_VIA_RELAY"):
+            # v1.1.1: a relayed --repo names only the home of the node's programme, and from here on the
+            # registered home is used in its place, never the caller's spelling.
+            args.repo = _relayed_repo(args.repo)
         if action == "lane":
             return 0, gitops.merge_lane(args.project, args.lane, args.repo)
         if action == "check":
@@ -548,10 +567,13 @@ def dispatch(args) -> tuple[int, str]:
         if action in ("revoke", "revoke-minimal"):
             return 0, permissions.revoke(action)
         raise util.usage("ygg agents allow-standard [--yes] | allow-minimal | revoke")
+    if command == "codex":
+        from . import codexsignin
+        return codexsignin.verb(action, getattr(args, "flag", None)), ""
     raise YggError(util.EXIT_USAGE, "unknown command")
 
 
-NO_PREVALIDATION = {"init", "hook", "_supervise", "plugins", "profile", "lane-check", "demo"}
+NO_PREVALIDATION = {"init", "hook", "_supervise", "_tend", "plugins", "profile", "lane-check", "demo"}
 # Safety commands act on local evidence first; their validation never reads the tracker (I7).
 SAFETY_COMMANDS = {"stop", "pause", "resume"}
 # A broken config or profile file makes every validated command refuse. For the emergency commands the message also says why
@@ -569,8 +591,43 @@ def _error_text(error: YggError, command) -> str:
     return error.message
 
 
+def _relayed_unread_check() -> None:
+    """A Codex agent gets no inbox notice, so a relayed `wp ready` or `wp complete` waits on every message it has
+    not acknowledged, the ones given at reservation included (v1.1.1, CB-08; A11 AC-92's prompt line)."""
+    from . import hooks
+    node = util.env("YGG_NODE") or ""
+    refusal = hooks.unread_refusal(node, hooks.unread_counts(node, None))
+    if refusal:
+        raise util.refuse(refusal)
+
+
+def _relayed_repo(repo) -> str:
+    """Under YGG_VIA_RELAY every repository selector must resolve to the registered home of the node's programme
+    before any git runs. The match is by resolved path, without git, and the registered
+    home is returned for the caller to use instead of its own path, which can be a link it retargets later."""
+    import os
+    from . import quarantine, state, tracker
+    programme = util.env("YGG_PROGRAMME") or ""
+    node = state.all_nodes().get(util.env("YGG_NODE") or "") or {}
+    programme = node.get("programme") or programme
+    # A box is refused first, by the walk that stops at the first box, so nothing inside one is ever resolved.
+    quarantine.refuse_box_repo(repo, programme)
+    try:
+        home = tracker.programme_home(tracker.programme(programme))
+    except (YggError, KeyError):
+        home = None
+    if not home or os.path.realpath(str(repo)) != os.path.realpath(str(home)):
+        raise util.refuse("--repo must name the home of programme " + str(programme))
+    return str(home)
+
+
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    from . import relay
+    if relay.client_wanted(argv):
+        # A Codex agent's ygg: the call runs outside the sandbox, through the supervisor (v1.1.1, CB-D3).
+        return relay.client_main(argv)
+    relay.relayed_hold()
     command = None
     try:
         args = build().parse_args(argv)

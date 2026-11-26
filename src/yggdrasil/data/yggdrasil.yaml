@@ -54,6 +54,8 @@ stage_close: default
 agent_project_settings: exclude
 # Yggdrasil's own Claude Code folder for agents (AC-75); they sign in with the credentials in their environment.
 agent_claude_config_dir: ~/.config/yggdrasil/agent-claude
+# Yggdrasil's own Codex sign-in folder, shared by every Codex session (ygg codex login writes it).
+agent_codex_login_dir: ~/.config/yggdrasil/agent-codex
 agent_env_passthrough: []
 command_retry_limit: 3
 busy_max_minutes: 60

@@ -1,5 +1,5 @@
-# Release switches for v1.1.0, as shipped. A switch is "on" only when every acceptance criterion it carries
-# passed; see docs/releases/v1.1.0.md. Values are quoted, because an unquoted on or off is a YAML boolean.
+# Release switches for v1.1.1, as shipped. A switch is "on" only when every acceptance criterion it carries
+# passed; see docs/releases/v1.1.1.md. Values are quoted, because an unquoted on or off is a YAML boolean.
 dashboard: "on"
 dashboard_serve: "off"
 summary: "on"

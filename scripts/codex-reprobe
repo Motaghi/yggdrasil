@@ -1,0 +1,1092 @@
+#!/usr/bin/env python3
+"""Re-probe a Codex CLI version before Yggdrasil's Codex builders may run on it.
+
+This is a maintainer's check, and it enables nothing by itself. Yggdrasil runs Codex builders only on a pair of
+platform and Codex version listed in CODEX_PROBED_VERSIONS (src/yggdrasil/codexlaunch.py). This script reports, row
+by row, whether a candidate pair behaves as Yggdrasil relies on. Adding the pair to that list is a separate one-line
+code change, made only after every row below passes on it. The row names are only labels.
+
+  P-1   `--add-dir <in>` with `writable_roots=[]`: the box and `in` are writable; a folder beside the box, the box's
+        parent, /tmp and the host TMPDIR are not
+  P-3   the box's empty `.git` anchor and the box itself cannot be removed, renamed, chmodded or replaced; a commit
+        in the clone one level down works
+  P-4   `codex exec` refuses every command when `--cd` or `--add-dir` names a link
+  P-5   a project `.codex/config.toml` naming an MCP server, planted in the box and in its clone, is ignored by
+        `codex exec` with the hermetic home (the server never starts), and `--strict-config` refuses an unknown
+        key. It plants no hook or notify program, and it does not run `codex sandbox`, which starts Yggdrasil's
+        own helper with the box as its working folder
+  P-7   a local toolchain (venv, a temporary file, git) works with TMPDIR and XDG_CACHE_HOME in `<box>/tmp`
+  P-8   a detached writer outlives `codex sandbox`; once its box path is gone its path writes fail, and
+        recreating the path gives the rights back (why a box path is never reused)
+  P-10  a later generation built while an earlier generation's writer lives: every write into the later
+        generation fails, and the control `<lane>.g0000010` is BINDING: if the writer can write it, seatbelt
+        matches path rules by string prefix and the version is refused
+  P-12  no key reaches an agent's commands: `env` and `ps eww -p $PPID`, run as the agent's command on the scripted
+        endpoint, once from a builder sandbox (the builder command line and the hermetic config) and once from a
+        probed reviewer (the config file's `shell_environment_policy` only), show none of the dummy values of
+        CODEX_API_KEY, OPENAI_API_KEY, CODEX_ACCESS_TOKEN, the provider's `env_key` or its header variable
+  P-13  the shared login through links: a login folder `L` and two session folders on different volumes where
+        possible (`--login-parent`), real OpenAI hosts blocked by a dead local proxy with NO_PROXY for a local
+        stand-in of the token and model endpoints (CODEX_REFRESH_TOKEN_URL_OVERRIDE, `chatgpt_base_url`; its
+        model origin is HTTPS with a dummy CA made at run time and trusted through SSL_CERT_FILE). A login
+        and a refresh through the links replace `L/auth.json` atomically while both links keep their exact
+        target text; two sessions refreshing at once end with one shared login, and each completes a model
+        request with the saved token; both locks sit in `L`; neither session folder holds a temporary or regular
+        credential copy; from inside a sandbox with the session's CODEX_HOME, `codex login --with-api-key`, an
+        append to `auth.json`, a write to `auth.lock` and `ln -sf` over `auth.json` all fail while `L/auth.json`
+        keeps its inode and content. Dummy values only
+  CB-28 the first request a builder's session sends offers `exec` and no subagent tool and lists no planted skill,
+        while a control run without Yggdrasil's settings does list the skill (the control is binding too)
+  CB-16, CB-25  live rows, which this script does not run: a whole builder session through the candidate build and
+        the real CLI. CB-16: while the session runs, its Codex home holds Yggdrasil's config and, when the user
+        has a Yggdrasil Codex login, `auth.json` and `auth.lock` as links into it; after settlement it holds the
+        config and only files Codex itself created; no MCP server starts. CB-25: the builder writes only in its own box, and
+        its commits reach the project only through the relay and the receive step. The maintainer runs them
+        separately, against the same kind of scripted model endpoint, and records their results here with
+        `--mark CB-16=pass --mark CB-25=pass`; the script takes those marks as given
+
+No row calls a model: `codex sandbox` runs no model, and every `codex exec` row talks to a scripted Responses
+endpoint that the script starts on 127.0.0.1 and that answers with a fixed command. Every row runs in a fresh
+folder under `--work` with its own CODEX_HOME holding only a config the probe writes (and, for P-13, links the probe
+makes), so Codex reads no settings from your own Codex home. P-12 and P-13 also run with a HOME of their own, so
+your own `~/.codex` is never read or written, and P-13's stand-in answers the ChatGPT endpoints locally. With
+`--login-parent <folder>`, P-13 makes `<folder>/L` (the run is refused when it already exists) and removes the files
+it made there and the folder at the end of the row, pass or fail; a folder holding anything else is kept and named
+in the row's detail. The other rows keep your HOME, and P-1 tries to write a file in /tmp and in your TMPDIR (removed
+afterwards) to show that the sandbox refuses it. Every process started is stopped by its exact pid. The result is one JSON record per row under
+`<work>/records/` and a summary in `<work>/reprobe.json`; the exit status is 0 only when every row passed.
+
+Usage: scripts/codex-reprobe --work <empty folder> [--codex <path>] [--rows P-1,P-10,...] [--mark CB-16=pass]
+                             [--login-parent <folder on another volume>]
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import shlex
+import signal
+import stat
+import subprocess
+import sys
+import tempfile
+import textwrap
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROWS = ("P-1", "P-3", "P-4", "P-5", "P-7", "P-8", "P-10", "P-12", "P-13", "CB-28", "CB-16", "CB-25")
+LIVE = ("CB-16", "CB-25")
+# Every row the script runs itself, by the Probe method that runs it.
+RUNNERS = {"P-1": "p1", "P-3": "p3", "P-4": "p4", "P-5": "p5", "P-7": "p7", "P-8": "p8", "P-10": "p10",
+           "P-12": "p12", "P-13": "p13", "CB-28": "cb28"}
+# The names Yggdrasil's hermetic config keeps out of the agent's commands, as P-12 sets them (dummy values only).
+KEY_NAMES = ("CODEX_API_KEY", "OPENAI_API_KEY", "CODEX_ACCESS_TOKEN", "REPROBE_KEY", "REPROBE_HEADER")
+# A proxy address nothing listens on: every request that does not go to the local stand-in fails.
+DEAD_PROXY = "http://127.0.0.1:9"
+# What the link probe and the Codex runs it starts put in its login folder `<parent>/L`, removed by name at the end.
+P13_LOGIN_FILES = ("auth.json", "auth.lock", "auth.json.lock", "config.toml")
+ACCOUNT = "8f0b6a7e-2c1d-4e5f-9a3b-1c2d3e4f5a6b"  # a made-up account id for P-13's dummy login
+DISABLED = ("hooks", "apps", "plugins", "remote_plugin", "plugin_sharing", "browser_use", "browser_use_external",
+            "computer_use", "in_app_browser", "in_app_local_automation", "multi_agent", "skill_mcp_dependency_install",
+            "image_generation", "tool_suggest", "system_proxy_fallback", "respect_system_proxy")
+SUBAGENT_TOOLS = ("spawn_agent", "send_message", "wait_agent", "list_agents", "interrupt_agent", "followup_task")
+SANDBOX_KEYS = ("-c", "sandbox_workspace_write.writable_roots=[]",
+                "-c", "sandbox_workspace_write.network_access=false",
+                "-c", "sandbox_workspace_write.exclude_slash_tmp=true",
+                "-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true")
+STARTED: list[subprocess.Popen] = []
+
+ENDPOINT = textwrap.dedent('''
+    import json, sys, http.server, socketserver
+    LOG, PORTFILE, CMDF = sys.argv[1], sys.argv[2], sys.argv[3]
+    def sse(ev):
+        return ("event: " + ev["type"] + "\\ndata: " + json.dumps(ev) + "\\n\\n").encode()
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+        def do_GET(self):
+            self.send_response(404); self.end_headers()
+        def do_POST(self):
+            n = int(self.headers.get("content-length") or 0); body = self.rfile.read(n)
+            try: req = json.loads(body)
+            except Exception: req = {"raw": body[:2000].decode(errors="replace")}
+            with open(LOG, "a") as f: f.write(json.dumps({"path": self.path, "req": req}) + "\\n")
+            items = req.get("input", []) if isinstance(req, dict) else []
+            done = any(isinstance(i, dict) and i.get("type") in ("function_call_output", "custom_tool_call_output")
+                       for i in items)
+            cmd = open(CMDF).read().strip()
+            evs = [{"type": "response.created", "response": {"id": "resp_x"}}]
+            if done or not cmd:
+                evs.append({"type": "response.output_item.done", "output_index": 0, "item": {"type": "message",
+                            "role": "assistant", "id": "msg_1", "content": [{"type": "output_text", "text": "done"}]}})
+            else:
+                js = ("const r = await tools.exec_command(" + json.dumps({"cmd": cmd, "yield_time_ms": 20000}) +
+                      "); text(typeof r === 'string' ? r : JSON.stringify(r));")
+                evs.append({"type": "response.output_item.done", "output_index": 0, "item": {"type": "custom_tool_call",
+                            "id": "ctc_1", "call_id": "call_1", "name": "exec", "input": js}})
+            evs.append({"type": "response.completed", "response": {"id": "resp_x", "usage": {"input_tokens": 1,
+                        "input_tokens_details": None, "output_tokens": 1, "output_tokens_details": None,
+                        "total_tokens": 2}}})
+            self.send_response(200); self.send_header("content-type", "text/event-stream"); self.end_headers()
+            for e in evs: self.wfile.write(sse(e))
+    class S(socketserver.ThreadingMixIn, http.server.HTTPServer): daemon_threads = True
+    s = S(("127.0.0.1", 0), H)
+    open(PORTFILE, "w").write(str(s.server_address[1]))
+    s.serve_forever()
+''')
+
+WRITER = textwrap.dedent('''
+    import os, sys, time
+    log, seconds, targets = sys.argv[1], float(sys.argv[2]), sys.argv[3:]
+    if os.fork(): os._exit(0)
+    os.setsid()
+    if os.fork(): os._exit(0)
+    for k in list(os.environ):
+        if k.startswith(("YGG_", "CODEX_")): os.environ.pop(k)
+    out = open(log, "a", buffering=1)  # one held descriptor, as CB-25's writers keep theirs
+    out.write("pid %d started\\n" % os.getpid())
+    end, i = time.time() + seconds, 0
+    while time.time() < end:
+        i += 1
+        for d in targets:
+            try:
+                with open(os.path.join(d, "w%d.txt" % i), "w") as f: f.write("x")
+                r = "ok"
+            except Exception as e:
+                r = type(e).__name__ + ":" + str(getattr(e, "strerror", e))
+            out.write("%.1f %d %s %s\\n" % (time.time(), i, d, r))
+        time.sleep(1)
+''')
+
+
+def competing_refreshes(lines):
+    """How many refreshes with P-13's expired token (`rt-gen-0`) reached the stand-in before it answered any:
+    two means both sessions refreshed the same expired login at once, not one after reading the other's save."""
+    first_out = next((i for i, line in enumerate(lines) if " TOKEN-OUT " in line), len(lines))
+    return sum(line.split()[-2:] == ["TOKEN-IN", "rt-gen-0"] for line in lines[:first_out])
+
+STANDIN = textwrap.dedent('''
+    # P-13's local stand-in for the ChatGPT token and model endpoints. Dummy values only.
+    # Token POST: holds every refresh until two have arrived (at most 20 s), so the two sessions' refreshes
+    # compete, then takes any refresh token, logs it and issues generation n.
+    # Workspace discovery (`/wham/accounts/check`): one account whose backend origin is this stand-in's HTTPS port
+    # and whose routing override is `NO_CONSTRAINT` (codex-cli 0.170.0 accepts only NO_CONSTRAINT, us_cr or us, and
+    # only an HTTPS origin). Codex then sends its model request to that origin over HTTPS POST.
+    # Model POST (`/codex/responses`): logs which session (by its prompt) and which access-token generation sent
+    # it, and answers with one scripted message. A body it cannot read (compressed, or not JSON) is logged as
+    # MODEL-UNREADABLE and answered with 400, never counted as a request. Everything else: 404.
+    import base64, http.server, json, socketserver, ssl, sys, threading, time
+    LOG, PORTFILE, ACCOUNT, CERT, KEY = sys.argv[1:6]
+    state = {"gen": 0, "asked": 0}
+    both = threading.Event()
+    lock = threading.Lock()
+    def b64(d): return base64.urlsafe_b64encode(json.dumps(d).encode()).rstrip(b"=").decode()
+    def jwt(c): return b64({"alg": "none", "typ": "JWT"}) + "." + b64(c) + ".sig"
+    def unb64(p): return json.loads(base64.urlsafe_b64decode(p + "=" * (-len(p) % 4)))
+    AUTH = {"chatgpt_account_id": ACCOUNT, "chatgpt_plan_type": "plus", "chatgpt_user_id": "user-reprobe"}
+    def sse(ev): return ("event: " + ev["type"] + "\\ndata: " + json.dumps(ev) + "\\n\\n").encode()
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+        def note(self, text):
+            with lock, open(LOG, "a") as f: f.write("%.2f %s\\n" % (time.time(), text))
+        def gen(self):
+            try: return str(unb64((self.headers.get("Authorization") or "").split()[1].split(".")[1]).get("gen", 0))
+            except Exception: return "?"
+        def reply(self, code, data):
+            body = json.dumps(data).encode(); self.send_response(code)
+            self.send_header("content-type", "application/json"); self.send_header("content-length", str(len(body)))
+            self.end_headers(); self.wfile.write(body)
+        def do_GET(self):
+            self.note("GET " + self.path.split("?")[0] + " gen=" + self.gen())
+            if self.path.split("?")[0].endswith("/wham/accounts/check"):
+                entry = {"id": ACCOUNT, "account_id": ACCOUNT, "name": None, "plan_type": "plus",
+                         "structure": "personal", "is_deactivated": False, "can_access_with_session": True,
+                         "sso_connection_name": None, "is_fedramp_compliant_workspace": False,
+                         "workspace_backend_origin": ORIGIN, "account_routing_override": "NO_CONSTRAINT",
+                         "profile_picture_url": None}
+                return self.reply(200, {"accounts": [entry], "account_ordering": [ACCOUNT],
+                                        "default_account_id": ACCOUNT})
+            self.reply(404, {"detail": "not in the stand-in"})
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers.get("content-length") or 0)).decode(errors="replace")
+            path = self.path.split("?")[0]
+            if path.endswith("/oauth/token"):
+                try: sent = json.loads(body).get("refresh_token")
+                except ValueError: sent = "?"
+                self.note("TOKEN-IN " + str(sent))
+                with lock:
+                    state["asked"] += 1
+                    if state["asked"] >= 2: both.set()
+                both.wait(20)
+                with lock: state["gen"] += 1; g = state["gen"]
+                self.note("TOKEN-OUT rt-gen-%d" % g)
+                return self.reply(200, {"id_token": jwt({"email": "reprobe@example.invalid", "exp": int(time.time()) + 3600,
+                                                         "https://api.openai.com/auth": AUTH}),
+                                        "access_token": jwt({"exp": int(time.time()) + 3600, "gen": g,
+                                                             "https://api.openai.com/auth": AUTH}),
+                                        "refresh_token": "rt-gen-%d" % g})
+            if path.endswith("/codex/responses"):
+                encoding = (self.headers.get("content-encoding") or "identity").strip().lower()
+                try:
+                    if encoding != "identity":
+                        raise ValueError("a " + encoding + "-encoded body")
+                    text = json.dumps(json.loads(body))
+                except ValueError as error:
+                    self.note("MODEL-UNREADABLE " + str(error)[:120])
+                    return self.reply(400, {"error": {"message": "the stand-in cannot read this body",
+                                                      "type": "invalid_request_error"}})
+                who = "S1" if "reprobe-S1" in text else ("S2" if "reprobe-S2" in text else "?")
+                self.note("MODEL " + who + " gen=" + self.gen())
+                evs = [{"type": "response.created", "response": {"id": "resp_x"}},
+                       {"type": "response.output_item.done", "output_index": 0, "item": {"type": "message",
+                        "role": "assistant", "id": "msg_1", "content": [{"type": "output_text", "text": "done"}]}},
+                       {"type": "response.completed", "response": {"id": "resp_x", "usage": {"input_tokens": 1,
+                        "input_tokens_details": None, "output_tokens": 1, "output_tokens_details": None,
+                        "total_tokens": 2}}}]
+                self.send_response(200); self.send_header("content-type", "text/event-stream"); self.end_headers()
+                for e in evs: self.wfile.write(sse(e))
+                return
+            self.note("POST " + path + " gen=" + self.gen())
+            self.reply(404, {"detail": "not in the stand-in"})
+    class S(socketserver.ThreadingMixIn, http.server.HTTPServer): daemon_threads = True
+    plain = S(("127.0.0.1", 0), H)
+    ORIGIN = "http://127.0.0.1:%d" % plain.server_address[1]
+    if CERT:
+        secure = S(("127.0.0.1", 0), H)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); context.load_cert_chain(CERT, KEY)
+        secure.socket = context.wrap_socket(secure.socket, server_side=True)
+        ORIGIN = "https://127.0.0.1:%d" % secure.server_address[1]
+        threading.Thread(target=secure.serve_forever, daemon=True).start()
+    open(PORTFILE, "w").write(str(plain.server_address[1]))
+    plain.serve_forever()
+''')
+
+
+def jwt(claims: dict) -> str:
+    """An unsigned dummy token in the JSON Web Token layout, for P-13's stand-in login."""
+    import base64
+    def part(data: dict) -> str:
+        return base64.urlsafe_b64encode(json.dumps(data).encode()).rstrip(b"=").decode()
+    return part({"alg": "none", "typ": "JWT"}) + "." + part(claims) + ".sig"
+
+
+def claims(token: str) -> dict:
+    import base64
+    try:
+        middle = token.split(".")[1]
+        return json.loads(base64.urlsafe_b64decode(middle + "=" * (-len(middle) % 4)))
+    except (IndexError, ValueError):
+        return {}
+
+
+def dummy_login(refresh: str) -> dict:
+    """A ChatGPT-style login whose access token has expired, so the first request refreshes it."""
+    auth = {"chatgpt_account_id": ACCOUNT, "chatgpt_plan_type": "plus", "chatgpt_user_id": "user-reprobe"}
+    return {"auth_mode": "chatgpt", "OPENAI_API_KEY": None, "last_refresh": "2026-01-01T00:00:00Z",
+            "tokens": {"id_token": jwt({"email": "reprobe@example.invalid", "exp": int(time.time()) + 3600,
+                                        "https://api.openai.com/auth": auth}),
+                       "access_token": jwt({"exp": int(time.time()) - 60, "gen": 0,
+                                            "https://api.openai.com/auth": auth}),
+                       "refresh_token": refresh, "account_id": ACCOUNT}}
+
+
+def p13_sandbox_script(codex: str) -> str:
+    """P-13's write attempts from inside a sandbox whose CODEX_HOME is a session folder. Each prints its exit code;
+    the only path in the text is the Codex binary's, quoted for the shell."""
+    return ("printf '%s' reprobe-dummy-sandbox-key | " + shlex.quote(codex) +
+            " login --with-api-key -c 'cli_auth_credentials_store=\"file\"' >/dev/null 2>&1; echo LOGIN=$?; "
+            "(echo x >> \"$CODEX_HOME/auth.json\") 2>/dev/null; echo APPEND=$?; "
+            "(echo x > \"$CODEX_HOME/auth.lock\") 2>/dev/null; echo LOCK=$?; "
+            "ln -sf reprobe-elsewhere \"$CODEX_HOME/auth.json\" 2>/dev/null; echo LINK=$?")
+
+
+P12_COMMAND = "env; ps eww -p $PPID; true"
+
+
+def p13_session_argv(codex: str, box: Path) -> list[str]:
+    """One P-13 session: `codex exec` in its box with the builder sandbox keys. Request compression is off, so the
+    stand-in reads the model request's JSON body as sent (codex-cli 0.170.0 compresses it with zstd by default)."""
+    return [codex, "exec", "--sandbox", "workspace-write", "--skip-git-repo-check", "--cd", str(box), *SANDBOX_KEYS,
+            "--disable", "enable_request_compression", "-m", "gpt-6.1-sol", "-"]
+
+
+def standin_certificates(folder: Path) -> tuple[Path, Path, Path] | None:
+    """A dummy CA and a server certificate it signs for 127.0.0.1 (CA:FALSE, serverAuth), made with openssl in
+    `folder` at run time: (CA, certificate, key), or None when openssl fails. Codex refuses a self-signed CA used as
+    the server's own certificate (CaUsedAsEndEntity), so the two are kept apart; only the CA goes into
+    SSL_CERT_FILE."""
+    ca, ca_key = folder / "standin-ca.pem", folder / "standin-ca-key.pem"
+    cert, key, request = folder / "standin-cert.pem", folder / "standin-key.pem", folder / "standin.csr"
+    extensions = folder / "standin-cert.ext"
+    extensions.write_text("basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\n"
+                          "extendedKeyUsage=serverAuth\nsubjectAltName=IP:127.0.0.1\n")
+    steps = (["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(ca_key), "-out", str(ca), "-days", "2",
+              "-subj", "/CN=Yggdrasil reprobe dummy CA"],
+             ["req", "-newkey", "rsa:2048", "-nodes", "-keyout", str(key), "-out", str(request), "-subj",
+              "/CN=127.0.0.1"],
+             ["x509", "-req", "-in", str(request), "-CA", str(ca), "-CAkey", str(ca_key),
+              "-set_serial", "0x" + os.urandom(8).hex(), "-out", str(cert), "-days", "2", "-extfile", str(extensions)])
+    for step in steps:
+        try:
+            made = subprocess.run(["openssl", *step], capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                                  timeout=60)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if made.returncode != 0:
+            return None
+    return ca, cert, key
+
+
+def now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def stop_all() -> None:
+    for process in STARTED:
+        if process.poll() is None:
+            try:
+                os.kill(process.pid, signal.SIGTERM)
+                process.wait(timeout=5)
+            except (OSError, subprocess.TimeoutExpired):
+                try:
+                    os.kill(process.pid, signal.SIGKILL)
+                except OSError:
+                    pass
+
+
+def kill_pid(pid: int) -> None:
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
+class Probe:
+    def __init__(self, codex: str, work: Path, login_parent: Path | None = None):
+        self.codex, self.work, self.login_parent = codex, work, login_parent
+        # The login folder the link probe made in this run and the temporary names it wrote there, removed at its end.
+        self.p13_login: tuple[Path, tuple[int, int]] | None = None
+        self.p13_temporaries: list[str] = []
+
+    # ------------------------------------------------------------ helpers
+
+    def folder(self, row: str) -> Path:
+        path = self.work / row.lower()
+        path.mkdir(mode=0o700)
+        return path
+
+    def home(self, base: Path, config: str = "") -> Path:
+        home = base / "codex-home"
+        home.mkdir(mode=0o700)
+        (home / "config.toml").write_text(config)
+        return home
+
+    def env(self, home: Path, tmp: Path, **extra) -> dict:
+        found = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": os.environ.get("HOME", "/"),
+                 "LANG": os.environ.get("LANG", "C.UTF-8"), "CODEX_HOME": str(home), "TMPDIR": str(tmp),
+                 "XDG_CACHE_HOME": str(tmp / "cache"), "REPROBE_KEY": "not-a-secret"}
+        found.update(extra)
+        return found
+
+    def box(self, parent: Path, name: str = "box.g000001") -> Path:
+        box = parent / name
+        (box / "tmp" / "cache").mkdir(parents=True)
+        (box / ".git").mkdir(mode=0o500)
+        checkout = box / "checkout"
+        subprocess.run(["git", "init", "-q", str(checkout)], check=True, stdin=subprocess.DEVNULL)
+        (checkout / "a.txt").write_text("a\n")
+        git = ["git", "-C", str(checkout), "-c", "user.name=probe", "-c", "user.email=probe@example.invalid",
+               "-c", "core.hooksPath=/dev/null"]
+        subprocess.run(git + ["add", "a.txt"], check=True, stdin=subprocess.DEVNULL)
+        subprocess.run(git + ["commit", "-q", "-m", "a"], check=True, stdin=subprocess.DEVNULL)
+        return box
+
+    def sandbox(self, cwd: Path, script: str, home: Path, timeout: float = 120,
+                environment: dict | None = None) -> subprocess.CompletedProcess:
+        """`codex sandbox` as Yggdrasil's helper runner starts it: workspace-write, no `-C`, cwd from the process."""
+        argv = [self.codex, "sandbox", "-c", 'sandbox_mode="workspace-write"', *SANDBOX_KEYS, "--", "sh", "-c", script]
+        if environment is None:
+            environment = self.env(home, cwd / "tmp" if (cwd / "tmp").is_dir() else cwd)
+        return subprocess.run(argv, cwd=str(cwd), env=environment, capture_output=True, text=True, timeout=timeout,
+                              stdin=subprocess.DEVNULL)
+
+    def endpoint(self, base: Path, command: str) -> tuple[subprocess.Popen, int, Path, Path]:
+        log, port, cmd = base / "endpoint.log", base / "endpoint.port", base / "endpoint.cmd"
+        cmd.write_text(command)
+        server = base / "endpoint.py"
+        server.write_text(ENDPOINT)
+        process = subprocess.Popen([sys.executable, "-I", str(server), str(log), str(port), str(cmd)],
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        STARTED.append(process)
+        for _ in range(100):
+            if port.exists() and port.read_text().strip():
+                return process, int(port.read_text()), log, cmd
+            time.sleep(0.1)
+        raise RuntimeError("the scripted endpoint did not start")
+
+    @staticmethod
+    def provider(port: int) -> str:
+        return ('model_provider = "reprobe"\n[model_providers.reprobe]\nname = "reprobe"\n'
+                'base_url = "http://127.0.0.1:' + str(port) + '/v1"\nenv_key = "REPROBE_KEY"\nwire_api = "responses"\n')
+
+    def hermetic(self, port: int, keys: bool = False) -> str:
+        """The Codex home Yggdrasil writes for a launch, with the scripted endpoint as provider. With `keys`, also
+        the file credential store, a header variable on the provider and the `shell_environment_policy` that
+        keeps every key name out of the agent's commands (P-12)."""
+        lines = [self.provider(port).split("\n[")[0], 'approval_policy = "never"', 'sandbox_mode = "workspace-write"',
+                 'web_search = "disabled"']
+        if keys:
+            lines += ['cli_auth_credentials_store = "file"', "", "[shell_environment_policy]",
+                      "exclude = [" + ", ".join(json.dumps(name) for name in KEY_NAMES) + "]"]
+        lines += ["", "[model_providers.reprobe]", 'name = "reprobe"',
+                  'base_url = "http://127.0.0.1:' + str(port) + '/v1"', 'env_key = "REPROBE_KEY"',
+                  'wire_api = "responses"']
+        if keys:
+            lines += ['env_http_headers = { "X-Reprobe" = "REPROBE_HEADER" }']
+        lines += ["", "[sandbox_workspace_write]", "writable_roots = []",
+                  "network_access = false", "exclude_slash_tmp = true", "exclude_tmpdir_env_var = true", "",
+                  "[agents]", "enabled = false", "", "[skills]", "include_instructions = false", "", "[features]"]
+        lines += [name + " = false" for name in DISABLED]
+        return "\n".join(lines) + "\n"
+
+    def builder_exec(self, home: Path, box: Path, add_dir: Path | None, tmp: Path, prompt: str = "probe",
+                     hermetic: bool = True, timeout: float = 180, extra: tuple = (),
+                     environment: dict | None = None) -> subprocess.CompletedProcess:
+        """`codex exec` with the builder command line of "The Codex command line". `extra` adds options after the
+        hermetic ones; `environment` replaces the default environment."""
+        argv = [self.codex, "exec", "--sandbox", "workspace-write", "--skip-git-repo-check", "--cd", str(box)]
+        if add_dir is not None:
+            argv += ["--add-dir", str(add_dir)]
+        if hermetic:
+            argv += ["--ignore-rules", "--strict-config", "-c", 'approval_policy="never"', "-c", "mcp_servers={}",
+                     "-c", 'web_search="disabled"', "-c", "agents.enabled=false", "-c",
+                     "skills.include_instructions=false", *SANDBOX_KEYS]
+            for name in DISABLED:
+                argv += ["--disable", name]
+        argv += list(extra)
+        argv += ["-m", "gpt-6.1-sol", "--json", "-"]
+        return subprocess.run(argv, cwd=str(box / "checkout" if (box / "checkout").is_dir() else box),
+                              env=environment if environment is not None else self.env(home, tmp), input=prompt,
+                              capture_output=True, text=True, timeout=timeout)
+
+    def blocked_env(self, home: Path, tmp: Path, fake_home: Path, **extra) -> dict:
+        """The row environment with a HOME of its own and every outside host blocked by a dead proxy; only
+        127.0.0.1 is reached directly."""
+        found = self.env(home, tmp, HOME=str(fake_home))
+        for name in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy"):
+            found[name] = DEAD_PROXY
+        found["NO_PROXY"] = found["no_proxy"] = "127.0.0.1,localhost"
+        found.update(extra)
+        return found
+
+    @staticmethod
+    def requests(log: Path) -> list[dict]:
+        if not log.exists():
+            return []
+        return [json.loads(line) for line in log.read_text().splitlines() if line.strip()]
+
+    # ------------------------------------------------------------ rows
+
+    def p1(self) -> tuple[bool, str]:
+        base = self.folder("P-1")
+        box, inbox, outside = base / "box", base / "in", base / "outside"
+        for path in (box / "tmp" / "cache", inbox, outside):
+            path.mkdir(parents=True)
+        victim = base / "victim.txt"
+        victim.write_text("victim\n")
+        slash_tmp = Path("/tmp") / ("ygg-reprobe-" + str(os.getpid()))
+        host_tmp = Path(tempfile.gettempdir()) / ("ygg-reprobe-" + str(os.getpid()))
+        targets = {"box": box / "w", "in": inbox / "w", "outside": outside / "w", "parent": base / "w",
+                   "/tmp": slash_tmp, "host TMPDIR": host_tmp}
+        command = "; ".join("echo x > " + shlex.quote(str(p)) for p in targets.values()) + \
+            "; echo pwn >> " + shlex.quote(str(victim)) + "; true"
+        process, port, log, _ = self.endpoint(base, command)
+        home = self.home(base, self.provider(port))
+        try:
+            self.builder_exec(home, box, inbox, box / "tmp")
+        finally:
+            kill_pid(process.pid)
+        seen = {name: path.exists() for name, path in targets.items()}
+        for path in (slash_tmp, host_tmp):
+            if path.exists():
+                path.unlink()
+        ran = bool(self.requests(log))
+        ok = ran and seen["box"] and seen["in"] and not any(seen[k] for k in ("outside", "parent", "/tmp", "host TMPDIR")) \
+            and victim.read_text() == "victim\n"
+        return ok, "requests " + str(len(self.requests(log))) + "; writable: " + \
+            ", ".join(k for k, v in seen.items() if v) + "; victim " + \
+            ("unchanged" if victim.read_text() == "victim\n" else "changed")
+
+    def p3(self) -> tuple[bool, str]:
+        base = self.folder("P-3")
+        lane = base / "lane"
+        lane.mkdir()
+        box = self.box(lane)
+        before = os.stat(box)
+        home = self.home(base)
+        script = ("cd checkout && echo b > b.txt && git -c user.name=p -c user.email=p@example.invalid "
+                  "-c core.hooksPath=/dev/null add b.txt && git -c user.name=p -c user.email=p@example.invalid "
+                  "-c core.hooksPath=/dev/null commit -q -m b && echo COMMIT-OK; cd ..; "
+                  "rmdir .git; mv .git gone; chmod 700 .git; touch .git/x; mv ../box.g000001 ../moved; "
+                  "rm -rf ../box.g000001; ln -s / ../box.g000001.link && mv ../box.g000001.link ../box.g000001; true")
+        result = self.sandbox(box, script, home)
+        after = os.lstat(box)
+        anchor = box / ".git"
+        ok = "COMMIT-OK" in result.stdout and stat.S_ISDIR(after.st_mode) and \
+            (after.st_dev, after.st_ino) == (before.st_dev, before.st_ino) and anchor.is_dir() and \
+            not anchor.is_symlink() and stat.S_IMODE(os.stat(anchor).st_mode) == 0o500 and \
+            not os.listdir(anchor) and not (lane / "moved").exists()
+        return ok, "nested commit " + ("ok" if "COMMIT-OK" in result.stdout else "failed") + \
+            "; box same folder: " + str((after.st_dev, after.st_ino) == (before.st_dev, before.st_ino)) + \
+            "; anchor intact: " + str(anchor.is_dir() and not os.listdir(anchor))
+
+    def p4(self) -> tuple[bool, str]:
+        base = self.folder("P-4")
+        results = []
+        for case in ("cd", "add-dir"):
+            victim = base / ("victim-" + case)
+            victim.mkdir()
+            (victim / "v.txt").write_text("victim\n")
+            link = base / ("link-" + case)
+            os.symlink(str(victim), str(link))
+            real = base / ("real-" + case)
+            (real / "tmp").mkdir(parents=True)
+            command = "echo pwn >> " + shlex.quote(str(link / "v.txt")) + "; echo x > " + \
+                shlex.quote(str(link / "new.txt")) + "; true"
+            process, port, log, _ = self.endpoint(base / case if (base / case).mkdir() is None else base, command)
+            home = self.home(base / case, self.provider(port))
+            try:
+                if case == "cd":
+                    self.builder_exec(home, link, None, real / "tmp")
+                else:
+                    self.builder_exec(home, real, link, real / "tmp")
+            finally:
+                kill_pid(process.pid)
+            unchanged = (victim / "v.txt").read_text() == "victim\n" and not (victim / "new.txt").exists()
+            results.append((case, unchanged, len(self.requests(log))))
+        ok = all(unchanged and count for _, unchanged, count in results)
+        return ok, "; ".join(case + ": victim " + ("unchanged" if u else "WRITTEN") + ", requests " + str(c)
+                             for case, u, c in results)
+
+    def p5(self) -> tuple[bool, str]:
+        base = self.folder("P-5")
+        box = self.box(base)
+        markers = base / "markers"
+        markers.mkdir()
+        recorder = base / "rec.sh"
+        recorder.write_text("#!/bin/sh\ntouch " + shlex.quote(str(markers)) + "/ran-$1\ncat >/dev/null\n")
+        recorder.chmod(0o755)
+        for where in (box, box / "checkout"):
+            (where / ".codex").mkdir()
+            (where / ".codex" / "config.toml").write_text(
+                '[mcp_servers.projrec]\ncommand = "' + str(recorder) + '"\nargs = ["mcp"]\n'
+                'approval_policy = "on-request"\n')
+        process, port, log, _ = self.endpoint(base, "echo hello")
+        home = self.home(base, self.hermetic(port))
+        try:
+            run = self.builder_exec(home, box, None, box / "tmp")
+            strict = subprocess.run([self.codex, "exec", "--strict-config", "-c", "reprobe_unknown_key=1",
+                                     "--skip-git-repo-check", "--cd", str(box), "-"], input="x",
+                                    env=self.env(home, box / "tmp"), capture_output=True, text=True, timeout=60)
+        finally:
+            kill_pid(process.pid)
+        fired = sorted(os.listdir(markers))
+        ok = bool(self.requests(log)) and not fired and strict.returncode != 0
+        return ok, "requests " + str(len(self.requests(log))) + "; exec exit " + str(run.returncode) + \
+            "; recorders that ran: " + (", ".join(fired) or "none") + "; unknown key refused: " + \
+            str(strict.returncode != 0)
+
+    def p7(self) -> tuple[bool, str]:
+        base = self.folder("P-7")
+        box = self.box(base)
+        home = self.home(base)
+        script = ("export TMPDIR=\"$PWD/tmp\" XDG_CACHE_HOME=\"$PWD/tmp/cache\"; "
+                  "python3 -m venv venv && venv/bin/python -c 'import tempfile; tempfile.NamedTemporaryFile()' && "
+                  "cd checkout && echo c > c.txt && git -c user.name=p -c user.email=p@example.invalid "
+                  "-c core.hooksPath=/dev/null add c.txt && git -c user.name=p -c user.email=p@example.invalid "
+                  "-c core.hooksPath=/dev/null commit -q -m c && echo TOOLCHAIN-OK")
+        result = self.sandbox(box, script, home, timeout=300)
+        return "TOOLCHAIN-OK" in result.stdout, "exit " + str(result.returncode) + \
+            ("" if "TOOLCHAIN-OK" in result.stdout else "; " + result.stderr.strip()[-300:])
+
+    def _writer(self, base: Path, cwd: Path, seconds: int, targets: list[Path], home: Path) -> Path:
+        script = base / "writer.py"
+        script.write_text(WRITER)
+        log = cwd / "writer.log"
+        # The writer's standard streams go to /dev/null: a detached child that kept the pipes of this call open
+        # would make `codex sandbox` look as if it waited for the writer to finish.
+        self.sandbox(cwd, "python3 -I " + shlex.quote(str(script)) + " " + shlex.quote(str(log)) + " " + str(seconds) +
+                     " " + " ".join(shlex.quote(str(t)) for t in targets) + " </dev/null >/dev/null 2>&1", home,
+                     timeout=60)
+        return log
+
+    @staticmethod
+    def _writer_pid(log: Path) -> int | None:
+        try:
+            first = log.read_text().splitlines()[0].split()
+            return int(first[1]) if first[0] == "pid" else None
+        except (OSError, IndexError, ValueError):
+            return None
+
+    def p8(self) -> tuple[bool, str]:
+        base = self.folder("P-8")
+        lane = base / "lane"
+        lane.mkdir()
+        box = self.box(lane)
+        home = self.home(base)
+        log = self._writer(base, box, 14, [box], home)
+        time.sleep(4)
+        moved = lane / "box.g000001-moved"
+        os.rename(box, moved)
+        time.sleep(4)
+        box.mkdir()
+        time.sleep(4)
+        pid = self._writer_pid(moved / "writer.log")
+        lines = (moved / "writer.log").read_text().splitlines() if (moved / "writer.log").exists() else []
+        if pid:
+            kill_pid(pid)
+        outlived = pid is not None and any(" ok" in line for line in lines[1:3])
+        after_move = [l for l in lines if "Operation not permitted" in l or "No such file" in l]
+        regained = any(name.startswith("w") for name in os.listdir(box))
+        ok = outlived and bool(after_move) and regained
+        return ok, "writer outlived codex sandbox: " + str(outlived) + "; writes failed once the path was gone: " + \
+            str(bool(after_move)) + "; a recreated path was writable again: " + str(regained)
+
+    def p10(self) -> tuple[bool, str]:
+        base = self.folder("P-10")
+        lane = base / "lane"
+        lane.mkdir()
+        own = self.box(lane, "pm1tl1.g000001")
+        later, control = lane / "pm1tl1.g000002", lane / "pm1tl1.g0000010"
+        home = self.home(base)
+        log = self._writer(base, own, 20, [own, later, control], home)
+        time.sleep(5)
+        later.mkdir()  # trusted code outside the sandbox makes the later generation, and the probe's control
+        control.mkdir()
+        made = time.time()
+        time.sleep(12)
+        pid = self._writer_pid(log)
+        if pid:
+            kill_pid(pid)
+        rows = [line.split(None, 3) for line in log.read_text().splitlines()[1:] if line.strip()]
+        after = [r for r in rows if len(r) == 4 and float(r[0]) > made + 1]
+        own_ok = any(r[2] == str(own) and r[3] == "ok" for r in rows)
+        later_writes = [r for r in after if r[2] == str(later)]
+        control_writes = [r for r in after if r[2] == str(control)]
+        later_refused = bool(later_writes) and all("Operation not permitted" in r[3] for r in later_writes)
+        control_refused = bool(control_writes) and all("Operation not permitted" in r[3] for r in control_writes)
+        ok = own_ok and later_refused and control_refused and not os.listdir(later) and not os.listdir(control)
+        detail = ("own box writable: " + str(own_ok) + "; later generation refused " +
+                  str(sum("Operation not permitted" in r[3] for r in later_writes)) + " of " + str(len(later_writes)) +
+                  "; control refused " + str(sum("Operation not permitted" in r[3] for r in control_writes)) + " of " +
+                  str(len(control_writes)))
+        if control_writes and not control_refused:
+            detail += "; the writer wrote the control folder, so seatbelt matches path rules by string prefix here"
+        return ok, detail
+
+    def p12(self) -> tuple[bool, str]:
+        base = self.folder("P-12")
+        values = {name: "reprobe-p12-" + name.lower().replace("_", "-") + "-" + os.urandom(6).hex() for name in KEY_NAMES}
+        excluded = "shell_environment_policy.exclude=[" + ",".join(json.dumps(n) for n in KEY_NAMES) + "]"
+        builder_line = ("-c", 'cli_auth_credentials_store="file"', "-c", excluded)
+        results = []
+        for case in ("builder", "reviewer"):
+            folder = base / case
+            folder.mkdir()
+            fake_home = folder / "home"
+            fake_home.mkdir()
+            box = folder / "box"
+            (box / "tmp").mkdir(parents=True)
+            process, port, log, _ = self.endpoint(folder, P12_COMMAND)
+            home = self.home(folder, self.hermetic(port, keys=True))
+            environment = self.blocked_env(home, box / "tmp", fake_home, **values)
+            try:
+                if case == "builder":
+                    run = self.builder_exec(home, box, None, box / "tmp", extra=builder_line, environment=environment)
+                else:  # the reviewer's command line has no hermetic overrides: the config file alone keeps the keys out
+                    run = self.builder_exec(home, box, None, box / "tmp", hermetic=False, environment=environment)
+            finally:
+                kill_pid(process.pid)
+            outputs = [json.dumps(item) for request in self.requests(log)
+                       for item in (request["req"].get("input") or []) if isinstance(request.get("req"), dict)
+                       and isinstance(item, dict) and item.get("type") in ("function_call_output",
+                                                                            "custom_tool_call_output")]
+            text = "\n".join(outputs)
+            ran = "PATH=" in text
+            leaked = sorted(name for name, value in values.items() if value in text or (name + "=") in text)
+            ps_seen = "refused by the sandbox" if "operation not permitted: ps" in text else \
+                str("PID" in text and "COMMAND" in text)
+            results.append((case, ran, leaked, ps_seen, run.returncode))
+        ok = all(ran and not leaked for _, ran, leaked, _, _ in results)
+        return ok, "; ".join(case + ": env ran " + str(ran) + ", ps of the parent: " + ps + ", exit " +
+                             str(code) + ", keys visible: " + (", ".join(leaked) or "none")
+                             for case, ran, leaked, ps, code in results)
+
+    def p13(self) -> tuple[bool, str]:
+        base = self.folder("P-13")
+        made_parent = None
+        if self.login_parent is not None:
+            parent = self.login_parent
+        else:
+            home_dir = Path(os.path.expanduser("~"))
+            if os.stat(home_dir).st_dev != os.stat(self.work).st_dev:
+                made_parent = Path(tempfile.mkdtemp(prefix="ygg-reprobe-login-", dir=str(home_dir)))
+                parent = made_parent
+            else:
+                parent = base
+        try:
+            ok, detail = self._p13(base, parent)
+        finally:
+            kept = self.remove_p13_login()
+            if made_parent is not None:
+                # Only an empty folder goes: what the row did not make is never removed with it.
+                try:
+                    os.rmdir(made_parent)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    kept = (kept + "; " if kept else "") + (str(made_parent) + " was kept: it still holds entries this "
+                                                             "row did not remove; check it before the next run")
+        return ok, detail + ("; " + kept if kept else "")
+
+    def remove_p13_login(self) -> str:
+        """Remove the login folder this run's link probe made, by the exact names it and the Codex runs it started
+        put there, then the folder itself; never a folder it did not make. Returns why the folder was kept, or ""."""
+        made, self.p13_login = self.p13_login, None
+        if made is None:
+            return ""
+        login, identity = made
+        # The names are removed through a descriptor of the very folder this row made, opened without following a
+        # link, so a folder moved away and replaced (by a link or another folder) is never touched.
+        try:
+            folder = os.open(str(login), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except FileNotFoundError:
+            return ""
+        except OSError:
+            return str(login) + " was kept: it is no longer the folder this row made; check it before the next run"
+        try:
+            info = os.fstat(folder)
+            if (info.st_dev, info.st_ino) != identity:
+                return str(login) + " was kept: it is no longer the folder this row made; check it before the next run"
+            for name in P13_LOGIN_FILES + tuple(self.p13_temporaries):
+                try:
+                    os.unlink(name, dir_fd=folder)
+                except OSError:
+                    pass  # absent, or not a file: left in place, and the folder with it
+            try:
+                left = sorted(os.listdir(folder))
+            except OSError:
+                left = ["entries it cannot list"]
+        finally:
+            os.close(folder)
+        self.p13_temporaries = []
+        if left:
+            return (str(login) + " was kept: it holds " + ", ".join(left) + ", which this row did not make; remove "
+                    "it before the next run")
+        try:
+            os.rmdir(login)
+        except OSError:
+            return str(login) + " was kept: it could not be removed; remove it before the next run"
+        return ""
+
+    def _p13(self, base: Path, parent: Path) -> tuple[bool, str]:
+        login = parent / "L"
+        # The folder sits in a private folder the row made (or one you named); only you can replace it while the
+        # row runs, so the identity read here is the folder just made.
+        login.mkdir(mode=0o700)
+        made = os.lstat(login)
+        self.p13_login = (login, (made.st_dev, made.st_ino))
+        sessions = {name: base / name for name in ("S1", "S2")}
+        cross_volume = os.stat(login).st_dev != os.stat(base).st_dev
+        fake_home = base / "home"
+        fake_home.mkdir()
+        failures, notes = [], ["login folder and sessions on " + ("different volumes" if cross_volume else
+                                                                  "the same volume (no other volume given)")]
+
+        def write_login(data: dict) -> None:
+            temporary = login / (".reprobe-" + os.urandom(4).hex())
+            self.p13_temporaries.append(temporary.name)
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            os.write(descriptor, json.dumps(data).encode())
+            os.close(descriptor)
+            os.rename(temporary, login / "auth.json")
+
+        def links_intact() -> bool:
+            return all(os.path.islink(folder / name) and os.readlink(folder / name) == str(login / name)
+                       for folder in sessions.values() for name in ("auth.json", "auth.lock"))
+
+        def identity(path: Path) -> tuple:
+            info = os.lstat(path)
+            return info.st_dev, info.st_ino
+
+        (login / "config.toml").write_text('cli_auth_credentials_store = "file"\n')
+        write_login(dummy_login("rt-gen-0"))
+        os.close(os.open(login / "auth.lock", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+        certificates = standin_certificates(base)
+        if certificates is None:
+            ca = cert = key = None
+            failures.append("TLS certificates for the stand-in (openssl failed)")
+        else:
+            ca, cert, key = certificates
+        log, portfile = base / "standin.log", base / "standin.port"
+        server = base / "standin.py"
+        server.write_text(STANDIN)
+        process = subprocess.Popen([sys.executable, "-I", str(server), str(log), str(portfile), ACCOUNT,
+                                    str(cert) if cert else "", str(key) if key else ""],
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        STARTED.append(process)
+        runs = {}
+        try:
+            for _ in range(100):
+                if portfile.exists() and portfile.read_text().strip():
+                    break
+                time.sleep(0.1)
+            else:
+                raise RuntimeError("the stand-in did not start")
+            port = int(portfile.read_text())
+            for name, folder in sessions.items():
+                folder.mkdir(mode=0o700)
+                (folder / "config.toml").write_text('cli_auth_credentials_store = "file"\nchatgpt_base_url = '
+                                                    '"http://127.0.0.1:' + str(port) + '/backend-api/"\n')
+                for link in ("auth.json", "auth.lock"):
+                    os.symlink(str(login / link), str(folder / link))
+            boxes = {name: self.box(base, "box-" + name.lower()) for name in sessions}
+            extra = {"CODEX_REFRESH_TOKEN_URL_OVERRIDE": "http://127.0.0.1:" + str(port) + "/oauth/token"}
+            if ca:
+                extra["SSL_CERT_FILE"] = str(ca)  # the dummy CA only, so Codex trusts the stand-in and nothing else
+
+            def environment(name: str) -> dict:
+                return self.blocked_env(sessions[name], boxes[name] / "tmp", fake_home, **extra)
+
+            # 1. A login through the first session's link replaces the target atomically.
+            before = identity(login / "auth.json")
+            subprocess.run([self.codex, "login", "--with-api-key", "-c", 'cli_auth_credentials_store="file"'],
+                           input="reprobe-dummy-login-key", env=environment("S1"), capture_output=True, text=True,
+                           timeout=60)
+            after = identity(login / "auth.json")
+            stored = json.loads((login / "auth.json").read_text() or "{}")
+            login_ok = after != before and stored.get("OPENAI_API_KEY") == "reprobe-dummy-login-key" and \
+                stat.S_IMODE(os.lstat(login / "auth.json").st_mode) == 0o600 and links_intact()
+            notes.append("login through the link replaced the target: " + str(login_ok))
+            if not login_ok:
+                failures.append("login")
+
+            # 2. Two sessions refresh the same expired login at once; each then sends a model request.
+            write_login(dummy_login("rt-gen-0"))
+            before = identity(login / "auth.json")
+            lock_before = identity(login / "auth.lock")
+            for name in sessions:
+                runs[name] = subprocess.Popen(
+                    p13_session_argv(self.codex, boxes[name]),
+                    cwd=str(boxes[name]), env=environment(name), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE, text=True)
+                STARTED.append(runs[name])
+            outputs = {}
+            for name, run in runs.items():
+                try:
+                    out, err = run.communicate("reprobe-" + name, timeout=180)
+                except subprocess.TimeoutExpired:
+                    run.kill()
+                    out, err = run.communicate()
+                outputs[name] = (run.returncode, err)
+            saved = json.loads((login / "auth.json").read_text() or "{}")
+            saved_refresh = (saved.get("tokens") or {}).get("refresh_token")
+            saved_gen = str(claims((saved.get("tokens") or {}).get("access_token") or "").get("gen"))
+            lines = log.read_text().splitlines() if log.exists() else []
+            sent = [line.split()[-1] for line in lines if " TOKEN-IN " in line]
+            raced = competing_refreshes(lines)
+            if raced < 2:
+                failures.append("competing refreshes")
+                notes.append("refreshes with the expired token before the first answer: " + str(raced) + " (two needed)")
+            models = {name: [line.split("gen=")[-1] for line in lines if " MODEL " + name + " " in line]
+                      for name in sessions}
+            unreadable = [line.split(" ", 2)[-1] for line in lines if " MODEL-UNREADABLE " in line]
+            unknown = sum(" MODEL ? " in line for line in lines)
+            if unreadable or unknown:
+                failures.append("model requests the stand-in could not read or match")
+                notes.append("unreadable model requests: " + str(len(unreadable)) +
+                             (" (" + unreadable[0] + ")" if unreadable else "") + "; unmatched: " + str(unknown))
+            refresh_ok = identity(login / "auth.json") != before and stat.S_ISREG(os.lstat(login / "auth.json").st_mode) \
+                and str(saved_refresh or "").startswith("rt-gen-") and saved_refresh != "rt-gen-0" and links_intact()
+            notes.append("refresh tokens sent: " + (", ".join(sent) or "none") + "; saved " + str(saved_refresh) +
+                         "; target replaced by the refresh: " + str(refresh_ok))
+            if not refresh_ok:
+                failures.append("refresh")
+            for name in sessions:
+                completed = saved_gen in models[name] and outputs[name][0] == 0
+                notes.append(name + " model requests with generation " + (", ".join(models[name]) or "none") +
+                             ", exit " + str(outputs[name][0]))
+                if not completed:
+                    failures.append(name + " model request with the saved token")
+                    reason = [line.strip() for line in outputs[name][1].splitlines() if "ERROR:" in line]
+                    if reason and not models[name]:
+                        notes.append(name + " stopped: " + reason[-1][:200])
+
+            # 3. Both locks sit in the login folder, and the session folders hold no credential copy.
+            locks_ok = (login / "auth.json.lock").is_file() and stat.S_ISREG(os.lstat(login / "auth.lock").st_mode) \
+                and identity(login / "auth.lock") == lock_before
+            if not locks_ok:
+                failures.append("locks")
+            copies = []
+            for name, folder in sessions.items():
+                for root, folders, files in os.walk(folder):
+                    for entry in files:
+                        path = Path(root) / entry
+                        if path.is_symlink():
+                            if path.parent == folder and entry in ("auth.json", "auth.lock"):
+                                continue
+                            # Codex's own helper links (apply_patch and the like) are expected; any other link
+                            # that names a credential or leads into the login folder is not.
+                            target = os.path.realpath(path)
+                            if "auth" in entry.lower() or target == os.path.realpath(login) or \
+                                    target.startswith(os.path.realpath(login) + os.sep):
+                                copies.append(str(path.relative_to(base)))
+                            continue
+                        if "auth" in entry.lower() and path.parent == folder and entry != "config.toml":
+                            copies.append(str(path.relative_to(base)))
+                            continue
+                        try:
+                            if path.stat().st_size < 8 * 1024 * 1024 and b"rt-gen-" in path.read_bytes():
+                                copies.append(str(path.relative_to(base)))
+                        except OSError:
+                            pass
+            notes.append("locks in the login folder: " + str(locks_ok) + "; credential copies in session folders: " +
+                         (", ".join(copies) or "none"))
+            if copies:
+                failures.append("credential copies")
+
+            # 4. From inside a sandbox with the session's CODEX_HOME, every write to the login fails.
+            content = (login / "auth.json").read_bytes()
+            before = identity(login / "auth.json")
+            lock_content = (login / "auth.lock").read_bytes()
+            result = self.sandbox(boxes["S1"], p13_sandbox_script(self.codex), sessions["S1"],
+                                  environment=environment("S1"))
+            codes = dict(part.split("=", 1) for part in result.stdout.split() if "=" in part)
+            refused = all(codes.get(step, "0") != "0" for step in ("LOGIN", "APPEND", "LOCK", "LINK"))
+            kept = identity(login / "auth.json") == before and (login / "auth.json").read_bytes() == content and \
+                (login / "auth.lock").read_bytes() == lock_content and links_intact()
+            notes.append("sandbox writes refused: " + ", ".join(k + "=" + v for k, v in sorted(codes.items())) +
+                         "; login unchanged: " + str(kept))
+            if not (refused and kept):
+                failures.append("sandbox writes")
+        finally:
+            kill_pid(process.pid)
+            for run in runs.values():
+                if run.poll() is None:
+                    run.kill()
+        if failures:
+            notes.insert(0, "failed: " + ", ".join(failures))
+        return not failures, "; ".join(notes)
+
+    def cb28(self) -> tuple[bool, str]:
+        base = self.folder("CB-28")
+        box = self.box(base)
+        skill = "rec-skill-7"
+        for where in (box, box / "checkout"):
+            folder = where / ".agents" / "skills" / skill
+            folder.mkdir(parents=True)
+            (folder / "SKILL.md").write_text("---\nname: " + skill + "\ndescription: marker skill " + skill +
+                                             "\n---\nReply with the word " + skill + ".\n")
+        process, port, log, cmd = self.endpoint(base, "")
+        home = self.home(base, self.hermetic(port))
+        try:
+            self.builder_exec(home, box, None, box / "tmp", prompt="You are Yggdrasil node pm1tl1 (re-probe)")
+            builder = self.requests(log)
+            log.write_text("")
+            control_home = base / "control-home"
+            control_home.mkdir(mode=0o700)
+            (control_home / "config.toml").write_text(self.provider(port))
+            self.builder_exec(control_home, box, None, box / "tmp", prompt="control", hermetic=False)
+            control = self.requests(log)
+        finally:
+            kill_pid(process.pid)
+        if not builder or not control:
+            return False, "the endpoint logged no request (builder " + str(len(builder)) + ", control " + \
+                str(len(control)) + ")"
+        first = json.dumps(builder[0]["req"])
+        tools = {t.get("name") for t in (builder[0]["req"].get("tools") or []) if isinstance(t, dict)}
+        offers_exec = '"exec"' in first or "exec" in tools
+        subagents = [name for name in SUBAGENT_TOOLS if '"' + name + '"' in first]
+        lists_skill = skill in first or str(box / ".agents" / "skills") in first
+        control_lists = skill in json.dumps(control[0]["req"])
+        ok = offers_exec and not subagents and not lists_skill and control_lists
+        return ok, "exec offered: " + str(offers_exec) + "; subagent tools: " + (", ".join(subagents) or "none") + \
+            "; planted skill listed: " + str(lists_skill) + "; control lists the skill: " + str(control_lists)
+
+
+def version_line(codex: str) -> str:
+    found = subprocess.run([codex, "--version"], capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL,
+                           env={"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", "/"),
+                                "LANG": os.environ.get("LANG", "C.UTF-8")})
+    lines = found.stdout.splitlines()
+    return lines[0] if found.returncode == 0 and len(lines) == 1 else "an unknown Codex version"
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="codex-reprobe", description=__doc__.split("\n\n")[0])
+    parser.add_argument("--work", required=True, help="an empty folder (made when missing) for this run")
+    parser.add_argument("--codex", default=os.environ.get("YGG_CODEX_BIN") or shutil.which("codex") or "codex")
+    parser.add_argument("--rows", default=",".join(ROWS))
+    parser.add_argument("--mark", action="append", default=[], help="ROW=pass|fail for a live row run elsewhere")
+    parser.add_argument("--login-parent", help="a folder on another volume for P-13's login folder <folder>/L, which "
+                        "must not exist yet and is removed at the end of the row; use a folder only you can write to "
+                        "(default: a new folder in your home when it is on another volume than --work)")
+    args = parser.parse_args(argv)
+    work = Path(args.work).absolute()
+    work.mkdir(parents=True, exist_ok=True)
+    if any(work.iterdir()):
+        print("codex-reprobe: " + str(work) + " is not empty", file=sys.stderr)
+        return 2
+    rows = [row.strip() for row in args.rows.split(",") if row.strip()]
+    unknown = [row for row in rows if row not in ROWS]
+    if unknown:
+        print("codex-reprobe: unknown rows: " + ", ".join(unknown), file=sys.stderr)
+        return 2
+    login_parent = Path(args.login_parent).absolute() if args.login_parent else None
+    if login_parent is not None and "P-13" in rows and os.path.lexists(login_parent / "L"):
+        print("codex-reprobe: " + str(login_parent / "L") + " already exists; P-13 makes that folder and removes it "
+              "at the end, so remove it or choose another --login-parent", file=sys.stderr)
+        return 2
+    marks = dict(item.split("=", 1) for item in args.mark if "=" in item)
+    codex = os.path.realpath(args.codex)
+    version = version_line(codex)
+    (work / "records").mkdir()
+    probe = Probe(codex, work, login_parent)
+    runners = {row: getattr(probe, method) for row, method in RUNNERS.items()}
+    summary = {"platform": sys.platform, "version": version, "codex": codex, "started": now(), "rows": {}}
+    try:
+        for row in rows:
+            if row in LIVE:
+                mark = marks.get(row)
+                result = "pass" if mark == "pass" else ("fail" if mark == "fail" else "not run")
+                detail = "marked by the operator" if mark else "a live row: run it with the candidate wheel, then --mark"
+            else:
+                try:
+                    ok, detail = runners[row]()
+                    result = "pass" if ok else "fail"
+                except Exception as error:  # noqa: BLE001  (a probe that breaks is a failed row, never a pass)
+                    result, detail = "fail", "the probe broke: " + type(error).__name__ + ": " + str(error)[:300]
+            record = {"row": row, "result": result, "detail": detail, "platform": sys.platform, "version": version,
+                      "at": now()}
+            (work / "records" / (row + ".json")).write_text(json.dumps(record, indent=2) + "\n")
+            summary["rows"][row] = result
+            print(row + ": " + result + " (" + detail + ")")
+    finally:
+        stop_all()
+    every = all(summary["rows"].get(row) == "pass" for row in ROWS)
+    summary["finished"] = now()
+    summary["verdict"] = "pass" if every else "fail"
+    (work / "reprobe.json").write_text(json.dumps(summary, indent=2) + "\n")
+    if every:
+        print("every row passed on " + sys.platform + " with " + version + ": the pair may be added to "
+              "CODEX_PROBED_VERSIONS")
+        return 0
+    print("not every row passed on " + sys.platform + " with " + version + ": that pair stays unprobed and Yggdrasil "
+          "refuses Codex builders on it")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

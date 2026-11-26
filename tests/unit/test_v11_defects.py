@@ -262,10 +262,10 @@ def test_team_lead_prompt_explains_the_pair_reviewer(world):
     assert "Sol pair" not in lead
 
 
-# Codex refusal texts (amendments A-1 to A-3)
+# Codex refusal texts (amendments A-1 to A-3); v1.1.1 (A-1R, A-2R) removes the D1 refusal itself.
 def test_codex_refusal_texts_say_not_in_this_release():
     from yggdrasil import models
-    assert models.CODEX_REFUSAL == "Codex builds are not in this release"
+    assert not hasattr(models, "CODEX_REFUSAL")
     import pathlib
     source = pathlib.Path(models.__file__).parent
     for name in ("commands.py", "mergecheck.py", "models.py"):

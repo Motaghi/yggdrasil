@@ -35,6 +35,7 @@ SCHEMA = {
     "name": GLOBAL, "hub_base_url": GLOBAL, "pools": GLOBAL, "launch_env": GLOBAL, "digest_dir": GLOBAL,
     "digest_filename": GLOBAL, "timezone": GLOBAL, "platform_pause_dir": GLOBAL, "commit_identity": GLOBAL,
     "leak_denylist": GLOBAL, "hub_state_file": GLOBAL, "agent_claude_config_dir": GLOBAL,
+    "agent_codex_login_dir": GLOBAL,
     "max_concurrent_sessions": GLOBAL, "agent_permissions": GLOBAL, "agent_permissions_version": GLOBAL,
     "agent_commands": GLOBAL, "agent_project_settings": GLOBAL,
     # project-scoped keys
@@ -67,7 +68,11 @@ STAGE_CLOSE_VALUES = ("default", "auto", "pm-only")
 PID_ONLY = {"work_ahead"}
 ENV_KEYS = {"tracker": "YGG_TRACKER", "state_root": "YGG_STATE_ROOT", "files_root": "YGG_FILES_ROOT",
             "plugin_paths": "YGG_PLUGIN_PATH"}
-PATH_KEYS = ("state_root", "files_root", "digest_dir", "platform_pause_dir", "agent_claude_config_dir")
+PATH_KEYS = ("state_root", "files_root", "digest_dir", "platform_pause_dir", "agent_claude_config_dir",
+             "agent_codex_login_dir")
+# Path keys made absolute without resolving links or collapsing `..`: their text is what Yggdrasil writes into
+# links and what the location check walks.
+UNRESOLVED_PATH_KEYS = ("agent_codex_login_dir",)
 LAYER_WORDS = {"programme": "in a programme", "pid": "in a PID", "package": "in a work package"}
 # Security-relevant keys: honoured only from trusted layers (core, preset, the user's own config,
 # profile, environment); for the PID only the user-approved snapshot counts.
@@ -85,10 +90,10 @@ USER_ONLY_KEYS = ("agent_commands", "agent_project_settings")
 # loads and acts on (t3_bin, alert_command, merge_check_path, agent_claude_config_dir) is one of them: a
 # repository's own config must never choose what Yggdrasil or its agents execute. Nor where the Linear
 # credentials are read or written: linear_token_store, linear_token_file and linear_keychain_service are
-# trusted-only too.
+# trusted-only too, and so is agent_codex_login_dir, the folder of the Codex login every Codex session uses.
 TRUSTED_ONLY_KEYS = ("agent_env_passthrough", "alert_command", "merge_check_path", "agent_project_settings",
                      "alert_macos", "t3_bin", "agent_claude_config_dir", "linear_token_store", "linear_token_file",
-                     "linear_keychain_service")
+                     "linear_keychain_service", "agent_codex_login_dir")
 AGREEMENT_FILE = "agreements.yaml"
 
 
@@ -205,7 +210,10 @@ def _resolve_paths(data: dict, base: Path) -> dict:
     for key in PATH_KEYS:
         value = data.get(key)
         if isinstance(value, str) and value and not os.path.isabs(os.path.expanduser(value)):
-            data[key] = str((base / value).resolve())
+            # An unresolved key keeps every component as written, `..` included: collapsing `hop/..` textually
+            # would hide a link the kernel follows.
+            data[key] = os.path.join(str(base), value) if key in UNRESOLVED_PATH_KEYS else \
+                str((base / value).resolve())
         elif isinstance(value, str):
             data[key] = os.path.expanduser(value)
     if isinstance(data.get("plugin_paths"), list):

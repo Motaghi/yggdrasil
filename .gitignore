@@ -5,3 +5,6 @@ __pycache__/
 /dist/
 /build/
 *.egg-info/
+
+# Runtime folders of the Codex builders acceptance suite (moved to the temp folder by tests/conftest.py)
+/tests/acceptance*/.scratch/

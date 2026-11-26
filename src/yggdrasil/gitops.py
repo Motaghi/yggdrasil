@@ -19,8 +19,8 @@ GIT_SELECTION = util.GIT_SELECTION
 git_env = util.git_env
 
 
-def git(repo, *args):
-    return util.trusted_git("-C", repo, *args)
+def git(repo, *args, home_objects: str | None = None):
+    return util.trusted_git("-C", repo, *args, home_objects=home_objects)
 
 
 def remote_urls(repo) -> dict[str, list[str]]:
@@ -150,7 +150,13 @@ def check_caller(project_id: str, remote_ref: str) -> str | None:
 
 
 def repo_home(path: str) -> str:
-    """Realpath of the home repository that owns `path` (a worktree resolves to its home)."""
+    """Realpath of the home repository that owns `path` (a worktree resolves to its home). A registered lane
+    clone that this hook process mapped resolves to its registered home, through the registry and never through
+    the clone's own git (v1.1.1)."""
+    from . import lanecheck
+    mapped = lanecheck.clone_home(path)
+    if mapped:
+        return os.path.realpath(mapped)
     result = git(path, "rev-parse", "--path-format=absolute", "--git-common-dir")
     common = result.stdout.strip()
     if result.returncode == 0 and common:
@@ -159,6 +165,18 @@ def repo_home(path: str) -> str:
             return os.path.dirname(common)
         return common
     return os.path.realpath(path)
+
+
+def _approved_entry_by_path(project_id: str, repo_path: str):
+    """The approved repo entry whose resolved path equals the caller's resolved path, found without git."""
+    repos = approved_repos(project_id)
+    if repos is None:
+        return None
+    real = os.path.realpath(str(repo_path))
+    for entry in repos:
+        if entry.get("path") and os.path.realpath(str(entry["path"])) == real:
+            return entry
+    return None
 
 
 def _repo_entry(project_id: str, repo_path: str):
@@ -189,29 +207,32 @@ def check_ref(repo: str, local_ref: str, local_sha: str, remote_ref: str, remote
     problem = check_url(project_id, repo, url) or check_caller(project_id, remote_ref)
     if problem:
         return problem
+    from . import lanecheck
+    objects = lanecheck._objects(repo)  # a registered clone's hook reads the home's objects here (v1.1.1)
     if remote_sha != ZERO:
-        if git(repo, "cat-file", "-e", remote_sha + "^{commit}").returncode != 0 or \
-                not is_ancestor(repo, remote_sha, local_sha):
+        if git(repo, "cat-file", "-e", remote_sha + "^{commit}", home_objects=objects).returncode != 0 or \
+                git(repo, "merge-base", "--is-ancestor", remote_sha, local_sha,
+                    home_objects=objects).returncode != 0:
             return "non-fast-forward push to " + remote_ref + " is denied"
     if remote_sha != ZERO:
         base = remote_sha
     else:
         trusted = trusted_base(project_id, repo)
-        base = git(repo, "merge-base", local_sha, trusted).stdout.strip() if trusted else ""
+        base = git(repo, "merge-base", local_sha, trusted, home_objects=objects).stdout.strip() if trusted else ""
     if not entry.get("workflow_changes"):
         if not base:
             return "workflow-change: no merge base with the main recorded at PID approval for " + remote_ref
         # Every transmitted commit counts, so a workflow change added and then reverted is still caught.
         changed = git(repo, "log", "--format=", "--name-only", "--no-renames", "-m", base + ".." + local_sha,
-                      "--", ".github/workflows/")
+                      "--", ".github/workflows/", home_objects=objects)
         if changed.returncode != 0 or changed.stdout.strip():
             return "workflow-change: the pushed range to " + remote_ref + " touches .github/workflows/"
     if not base:
         return "lane check: no merge base with the main recorded at PID approval for " + remote_ref
     # The lane check again, on every pushed commit: a commit made with its hooks skipped can't reach the remote.
-    from . import lanecheck
     try:
-        problems = lanecheck.range_problems(repo, base, local_sha, allow_ci=bool(entry.get("workflow_changes")))
+        problems = lanecheck.range_problems(repo, base, local_sha, allow_ci=bool(entry.get("workflow_changes")),
+                                            project=project_id)
     except lanecheck.CheckError as error:
         return "lane check: " + str(error)
     if problems:
@@ -698,8 +719,19 @@ def merge_lane(project_id: str, lane: str, repo: str) -> str:
     project = _project_for(project_id)
     _caller_is_pm(project)
     util.check_id(lane, "lane")
-    if _repo_entry(project_id, repo) is None:
+    from . import quarantine
+    quarantine.refuse_box_repo(repo, project.get("programme"))
+    # Match the caller's path to an approved repo by its resolved path first, without running git through it.
+    # A relayed call (a Codex agent's) must match that way; only a direct caller falls back to the git-based
+    # match, which also accepts a worktree of the approved repo.
+    entry = _approved_entry_by_path(project_id, repo)
+    if entry is None and not util.env("YGG_VIA_RELAY"):
+        entry = _repo_entry(project_id, repo)
+    if entry is None:
         raise util.refuse("gate: no approved PID of " + project_id + " names " + str(repo))
+    # From here on only the approved path is used, never the caller's spelling: a caller's path can be a link
+    # the caller retargets once the checks above have passed.
+    repo = str(entry["path"])
     util.helper_refusal(repo, "gate")
     branch = "ygg/" + project_id + "/lane/" + lane
     integration = "ygg/" + project_id + "/_integration"
@@ -752,8 +784,14 @@ def lane_sync(project_id: str, lane: str) -> str:
     main = git(repo, "rev-parse", "--verify", "--quiet", "refs/heads/main").stdout.strip()
     if not main:
         raise util.usage("main does not exist in " + repo)
+    from . import clones
+    clone_lane = clones.is_clone_lane(project_id, lane)
+    if clone_lane:
+        # v1.1.1: lane sync on a clone lane (no activation running, a clean clone, the receive step first).
+        clones.sync_precheck(project_id, lane)
+        head = git(repo, "rev-parse", "--verify", "--quiet", "refs/heads/" + branch).stdout.strip()
     if is_ancestor(repo, main, head):
-        return "lane " + branch + " already holds main\n"
+        return "lane " + branch + " already holds main\n" + (clones.sync_feed(project_id, lane) if clone_lane else "")
     from . import config
     identity = config.get("commit_identity")
     if isinstance(identity, dict) and identity.get("name") and identity.get("email"):
@@ -770,7 +808,8 @@ def lane_sync(project_id: str, lane: str) -> str:
                 raise
             raise util.refuse(LANE_SYNC_CONFLICT)
         lanecheck.record_sync(project_id, lane, new, main)
-    return "synced main into " + branch + " at " + new + "\n"
+    fed = clones.sync_feed(project_id, lane) if clone_lane else ""
+    return "synced main into " + branch + " at " + new + "\n" + fed
 
 
 def merge_mode(project_id: str) -> str:

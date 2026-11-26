@@ -8,9 +8,11 @@ Read [Security](security.md) first. The guards in this version catch accidents; 
 
 - **macOS or Linux.** Yggdrasil uses POSIX file locks, `ps` and the load average; Windows is not supported.
 - **Python 3.12 or later**, and `uv` or `pipx` to install the `ygg` command.
-- **Claude Code and Codex, both installed and logged in.** In v1.1 every session runs on Claude Code except the project reviewer, which checks each work package on a GPT-family model through Codex, so the review comes from another model family. Without Codex the project reviewer runs on the Claude model instead. A Codex-only setup is not supported in v1.1: project managers, team leads, workers and senior users on Codex are refused ("Codex builds are not in this release").
+- **Claude Code and Codex, both installed, each with a sign-in Yggdrasil can use** (see the two sign-in items below; agents do not use your own Codex login). By default every session runs on Claude Code except the project reviewer, which checks each work package on a GPT-family model through Codex, so the review comes from another model family. Without Codex the project reviewer runs on the Claude model instead. From v1.1.1 project managers, team leads, workers, senior users and project reviewers can all run on Codex, on macOS with codex-cli 0.170.0, except in collapsed projects. Claude Code is still needed for one session: the programme reviewer, which writes the morning summary after overnight work, always runs on Claude Code with the core Claude model. With Codex alone everything else runs, but that reviewer cannot start, so no morning summary is written. Codex builders run only in git programmes: in a `vault-docs` programme they are refused before anything is reserved, so such a programme needs Claude Code for its builders. They are also refused on Linux until Codex has been re-probed there. Codex builders have no network, so a project whose setup needs downloads cannot build on Codex.
 - **Your agreement to the agents' permissions.** Yggdrasil starts Claude Code as `claude -p --settings <file> --model <model> --effort <effort>`, with the prompt on standard input, and passes no permission flags. Agents run with Yggdrasil's own Claude Code settings folder, so what they may do without asking comes from the rules you agree to once with `ygg agents allow-standard --yes` or `ygg agents allow-minimal`. Until you agree, launches are refused. See [Security](security.md#what-agents-may-do-without-asking).
-- **A Claude Code sign-in the agents can use.** Headless Claude Code agents don't run with your own Claude Code folder (`~/.claude`). By default Yggdrasil points them at its own folder, `~/.config/yggdrasil/agent-claude` (the `agent_claude_config_dir` setting), through `CLAUDE_CONFIG_DIR`. That keeps your own instructions, hooks, skills and settings away from agents, but it also means the sign-in kept in your own Claude Code folder may not reach them. Give the conductor's environment a credential Claude Code reads from the environment, such as `CLAUDE_CODE_OAUTH_TOKEN` (made with `claude setup-token`) or `ANTHROPIC_API_KEY`; those pass to agents (see [Agent environment](configuration.md#agent-environment)). Or sign in once inside Yggdrasil's folder with `CLAUDE_CONFIG_DIR=~/.config/yggdrasil/agent-claude claude`. Codex sessions use your own Codex login. T3 sessions are different: they run in the T3 server's environment, so their sign-in and settings are whatever that server uses.
+- **A Claude Code sign-in the agents can use.** Headless Claude Code agents don't run with your own Claude Code folder (`~/.claude`). By default Yggdrasil points them at its own folder, `~/.config/yggdrasil/agent-claude` (the `agent_claude_config_dir` setting), through `CLAUDE_CONFIG_DIR`. That keeps your own instructions, hooks, skills and settings away from agents, but it also means the sign-in kept in your own Claude Code folder may not reach them. There are three ways to sign them in. Your own Claude subscription: sign in once inside Yggdrasil's folder with `CLAUDE_CONFIG_DIR=~/.config/yggdrasil/agent-claude claude`, or give the conductor's environment `CLAUDE_CODE_OAUTH_TOKEN` (made with `claude setup-token`). A proxy in front of Claude, such as CLIProxyAPI: set its address as the profile's `hub_base_url`, which agents get as `ANTHROPIC_BASE_URL`. An Anthropic API key: give the conductor's environment `ANTHROPIC_API_KEY`. These variables pass to agents (see [Agent environment](configuration.md#agent-environment)). Yggdrasil never reads, stores or copies a Claude login file. It passes `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_BASE_URL` from the conductor's environment to Claude Code agents, except where a profile's `hub_base_url` or `launch_env` sets one of them instead, and starts the unmodified Claude Code with them. T3 sessions are different: they run in the T3 server's environment, so their sign-in and settings are whatever that server uses.
+- **A Codex sign-in the agents can use**, if any role runs on Codex. Codex itself picks how a session signs in, in this order. If your Codex config names a model provider other than Codex's default, such as a proxy, that provider's own key is used and nothing else; when it reads the key from a variable (the provider's `env_key`), list the variable under `agent_env_passthrough` so it reaches agents (see [Codex through a proxy or another provider](configuration.md#agent-environment)). With Codex's default OpenAI provider, an API key in `CODEX_API_KEY` in the conductor's environment is used first; it reaches Codex sessions only. Otherwise Codex uses Yggdrasil's own Codex sign-in: run `ygg codex login` once in your own shell (add `--device-auth` on a machine without a browser, or `--with-api-key` to store an API key read from standard input). It signs in through Codex's own flow into one login folder for your user, `~/.config/yggdrasil/agent-codex` (the `agent_codex_login_dir` setting), and every Codex session links to that one login, so a refresh made by one session is seen by all of them. Codex sessions no longer run in your own Codex folder (`~/.codex`) or use its login; Yggdrasil reads only its model-provider settings from there (see [Agent environment](configuration.md#agent-environment)). `ygg doctor` shows which of these a Codex session would use, and `ygg codex status` shows the sign-in. Two sessions that refresh a ChatGPT sign-in at the same moment both send the same refresh token; Codex keeps one result, and the other session relies on OpenAI accepting the same token again for a short time (about an hour, by an OpenAI maintainer's account). A session that still fails its refresh recovers when it is launched again. The shared sign-in and `CODEX_API_KEY` reach Codex sessions only on macOS with codex-cli 0.170.0, the pair Yggdrasil has probed. A project reviewer on another Codex version, or on Linux even with 0.170.0, gets neither, so it needs a model provider with its own key; on Linux, whatever the Codex version, Yggdrasil's next step reads `Codex's shared sign-in is not probed on linux; use a model provider with its own key`, and on macOS with another version it names that version and also offers installing codex-cli 0.170.0. On Linux `ygg codex login` makes a login that no Codex session uses.
+- **The terms of your AI provider.** OpenAI recommends API keys for automation, and advises against sharing one login file across concurrent jobs, which is what Yggdrasil's own Codex sign-in does when several Codex sessions run at once. Anthropic prefers API keys for third-party and open-source tools, and says subscription sign-in is meant for ordinary, individual use. Every route above is for your own use only: never share a login, token or key with other people. You are responsible for following your provider's terms on whichever route you choose, a proxy included.
 - **git**, for projects that work on code or other files kept in a git repo.
 - **For each git repository the agents work on:** a GitHub remote, a default branch named `main` with branch protection on GitHub, and the `gh` command installed and logged in with a GitHub account that can read that protection. `gh` is needed for one thing: when you run `ygg pid approve`, Yggdrasil calls `gh api` to read the branch protection and rulesets on `main`, and by default it refuses to approve a plan without safe protection (see [Security](security.md#main-is-protected-by-the-server)). That call runs in your own shell, as your OS account, with your `gh` login. Agents are not meant to use `gh`. Their permission rules allow `ygg`, a few git commands and the test and build commands named in the plan you approved, so a Claude Code agent can't run `gh` unless that plan names it, and `GH_TOKEN` is not passed to them. An agent that reaches `gh` some other way, through a script for example, finds your `gh` login, because it runs as your OS user too (see [Known gaps](security.md#known-gaps)). Branch protection on private repositories may need a paid GitHub plan.
 - **A computer that stays on** while work runs.
@@ -25,11 +27,11 @@ You do all three in a conversation with your AI tool.
 
 Say:
 
-> Install Yggdrasil with `uv tool install git+https://github.com/Motaghi/yggdrasil@v1.1.0`, copy the `skills/yggdrasil-l1` folder from that repository into my skills folder, and set up `ygg conductor run` as a background service with `YGG_CONFIG` pointing at my config file.
+> Install Yggdrasil with `uv tool install git+https://github.com/Motaghi/yggdrasil@v1.1.1`, copy the `skills/yggdrasil-l1` folder from that repository into my skills folder, and set up `ygg conductor run` as a background service with `YGG_CONFIG` pointing at my config file.
 
 This does three things:
 
-- installs the `ygg` command (with uv, into `~/.local/bin`), pinned to release v1.1.0. Leave off `@v1.1.0` to install the newest code on the main branch instead;
+- installs the `ygg` command (with uv, into `~/.local/bin`), pinned to release v1.1.1. Leave off `@v1.1.1` to install the newest code on the main branch instead;
 - adds the `yggdrasil-l1` **skill**, a small instruction pack that teaches your AI tool how to be your main session (see [Installing the main-session skill](#installing-the-main-session-skill));
 - sets up the **conductor**, the small program that starts the agents when there is work for them. It uses no AI itself.
 
@@ -40,7 +42,7 @@ The conductor is required: while it isn't running, no agent starts. It must also
 The session runs `ygg init` in the folder that will hold your Yggdrasil config and records (for example `~/yggdrasil`) and asks you:
 
 1. **What is the work mostly?** Building software, writing and research, business tasks, or a mix.
-2. **Which AI tool do you have?** Claude Code, Codex, both, or T3 Code. Answer Claude Code or both: Codex alone gives a Codex-only setup, which v1.1 doesn't support.
+2. **Which AI tool do you have?** Claude Code, Codex, both, or T3 Code. Codex alone (or Codex being the only tool `ygg init` finds) puts every role on Codex except the programme reviewer, which still needs Claude Code. On Linux `ygg init` may still offer or pick Codex, but Codex builders are refused there at launch, so choose Claude Code for builders on Linux.
 3. **Where should the records be kept?** In files on this computer, or in Linear.
 4. **How much may the agents do without asking?** Ask me before each phase, or continue overnight within limits I set.
 5. **Which words should Yggdrasil use?** Plain words (recommended), or PRINCE2® terms.
@@ -54,6 +56,8 @@ From your answers Yggdrasil picks a preset, a ready-made set of defaults, either
 - `team` (only with `--preset team`): keeps the records in Linear, for several people sharing one tracker. It needs the Linear setup described in [Trackers](trackers.md#linear-tracker).
 
 It saves your choices in `yggdrasil.yaml`, with a plain comment above every line, and keeps the records in `ygg-tracker` and `ygg-state` next to it. [Configuration](configuration.md) explains every setting.
+
+If any role runs on Codex (by default the project reviewer does), give Codex agents a sign-in before the first project: run `ygg codex login` yourself in a terminal, or use one of the other routes under [What you need](#what-you-need). `ygg doctor` shows the route a Codex session would use.
 
 ### 3. Say "Start a Yggdrasil project"
 
@@ -83,11 +87,11 @@ Every step above can be done by hand.
 **Install** with uv or pipx:
 
 ```bash
-uv tool install git+https://github.com/Motaghi/yggdrasil@v1.1.0
-pipx install git+https://github.com/Motaghi/yggdrasil@v1.1.0
+uv tool install git+https://github.com/Motaghi/yggdrasil@v1.1.1
+pipx install git+https://github.com/Motaghi/yggdrasil@v1.1.1
 ```
 
-These install release v1.1.0. To install the newest code on the main branch instead, leave off `@v1.1.0`, for example `uv tool install git+https://github.com/Motaghi/yggdrasil`.
+These install release v1.1.1. To install the newest code on the main branch instead, leave off `@v1.1.1`, for example `uv tool install git+https://github.com/Motaghi/yggdrasil`.
 
 Or install from a clone, which also gives you the skill and the examples:
 
@@ -118,6 +122,14 @@ It asks the five questions from step 2 (press Enter on any of them for the defau
 Run `ygg config validate` afterwards to check the result.
 
 **Add the skill** as described in [Installing the main-session skill](#installing-the-main-session-skill).
+
+**Sign Codex agents in**, if any role runs on Codex, with one of the routes under [What you need](#what-you-need). For Yggdrasil's own Codex sign-in:
+
+```bash
+ygg codex login            # or: ygg codex login --device-auth
+ygg codex status
+ygg doctor                 # the line "codex sign-in:" names the route
+```
 
 **Start the conductor** in the same folder, to try it out:
 
@@ -152,6 +164,8 @@ Restart=on-failure
 [Install]
 WantedBy=default.target
 ```
+
+If the conductor needs a sign-in token or key such as `CLAUDE_CODE_OAUTH_TOKEN` or `CODEX_API_KEY`, keep it in a file with mode 0600 and point the service at it with `EnvironmentFile=` (on macOS, keep it in a LaunchAgent plist with mode 0600). Never put the token inline in a unit file that is shared or kept in a synced folder.
 
 Add the folders where `claude`, `codex` and `gh` live to `PATH` if they are elsewhere, then run `systemctl --user daemon-reload` and `systemctl --user enable --now yggdrasil-conductor`. On macOS, a LaunchAgent needs the same three things, with absolute paths, because launchd doesn't expand `~`.
 

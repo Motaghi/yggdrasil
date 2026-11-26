@@ -158,9 +158,9 @@ def test_ac23_retry_cap(a11, row):
 @pytest.mark.release('fallback-v1.1')
 @pytest.mark.parametrize('row', [1, 2, 3])
 def test_ac30_codex_commit_guards(a11, row):
+    a11.ready(models={'model': 'gpt-6.1-sol', 'effort': 'high'})
     if row == 2:
         a11.accepted()
-    a11.ready(models={'model': 'gpt-6.1-sol', 'effort': 'high'})
     if row == 1:
         a11.wait_step(codex=True, steps=[{'id': 'file', 'write_file': {'path': 'clean.txt', 'text': 'hello'}},
             {'id': 'add', 'run': ['git', 'add', 'clean.txt']}, {'id': 'commit', 'run': ['git', 'commit', '-m', 'x']}])
@@ -468,9 +468,9 @@ def test_ac79_pm_reset_switch(a11, row):
 @pytest.mark.release('fallback-v1.1')
 @pytest.mark.parametrize('row', [1, 2, 3])
 def test_ac91_codex_git_hooks(a11, row):
+    a11.ready(models={'model': 'gpt-6.1-sol', 'effort': 'high'})
     if row == 3:
         a11.accepted()
-    a11.ready(models={'model': 'gpt-6.1-sol', 'effort': 'high'})
     if row == 1:
         before = a11.trusted_git(a11.root / 'remote-a.git', 'rev-parse', 'ygg/alpha-p1/lane/pm1tl2').stdout
         result = a11.agent_git('push', 'origin', 'HEAD:ygg/alpha-p1/lane/pm1tl2', codex=True)
@@ -479,7 +479,10 @@ def test_ac91_codex_git_hooks(a11, row):
         result = a11.commit(text='zebra-orchid-7', arguments=['--no-verify', '-m', 'x'], codex=True)
     else:
         result = a11.agent_git('commit', '--amend', '-m', 'y', codex=True)
-    assert result.returncode == 1
+    assert result.returncode == (128 if row == 2 else 1)
+    if row == 2:
+        observation = a11.commit_observations[-1]
+        assert observation['exit'] == 128 and observation['after'] == observation['before']
     assert {1: 'DENIED: pm1tl1 may push only ygg/alpha-p1/lane/pm1tl1', 2: 'zebra-orchid-7',
             3: "the lane must keep WP-2's accepted commit"}[row] in result.stderr
 
@@ -487,6 +490,7 @@ def test_ac91_codex_git_hooks(a11, row):
 @pytest.mark.ac('AC-92')
 @pytest.mark.release('fallback-v1.1')
 def test_ac92_row1_codex_prompt(a11):
+    a11.ready(models={'model': 'gpt-6.1-sol', 'effort': 'high'})
     a11.start(codex=True)
     assert 'You get no inbox notice on this runtime: run ygg inbox pm1tl1 before each commit, each push and each ygg wp ready.' in a11.prompt()
 

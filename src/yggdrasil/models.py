@@ -86,8 +86,7 @@ def resolve_node(node: dict, package: str | None = None) -> dict:
             "pair_pool": pair_pool_value if pools else None, "source": source}
 
 
-# D1 (AC-99 rows 1 and 2): Codex runs only as the project reviewer in this release.
-CODEX_REFUSAL = "Codex builds are not in this release"
+# The roles v1.1.0 refused on Codex (D1); since v1.1.1 all four run on Codex (CB-D1).
 BUILDER_ROLES = ("pm", "tl", "worker", "su")
 
 
@@ -95,16 +94,3 @@ def is_codex(model) -> bool:
     return str(model or "").startswith("gpt")
 
 
-def refuse_codex_builder(node: dict, package: str | None = None) -> None:
-    """Refuse (exit 3) when a PM, team lead, worker or senior user would run on a Codex model, from any layer
-    known at the caller: PID approval, node add and launch resolve without a package; `wp authorise` passes the
-    package, where a package override and its lane meet."""
-    if node.get("role") in BUILDER_ROLES and is_codex(resolve_node(node, package)["model"]):
-        raise util.refuse(CODEX_REFUSAL)
-
-
-def refuse_codex_project(project: str) -> None:
-    """`ygg pid approve`: every builder node of the project, against the PID being approved."""
-    for node in sorted(state.all_nodes().values(), key=lambda n: n["id"]):
-        if node.get("project") == project:
-            refuse_codex_builder(node)

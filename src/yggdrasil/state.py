@@ -143,7 +143,7 @@ def caller_id() -> str:
 # session may run none of them; the value says whether the subcommand belongs to the verb's name.
 USER_VERBS = {"launch": False, "_supervise": False, "conductor": True, "heimdall": True, "rehydrate": False,
               "event": True, "attach": False, "detach": False, "t3": True, "agents": True,
-              "demo": False}
+              "demo": False, "codex": False}
 
 
 MANAGED_MARKER = ".ygg-managed"

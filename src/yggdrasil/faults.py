@@ -13,6 +13,8 @@ import os
 from pathlib import Path
 
 BOUNDARIES = ("before-spawn", "after-spawn", "after-exit", "before-signal")
+# The relay's own supervisor boundaries (v1.1.1). Kept out of BOUNDARIES, whose listing frozen A7 pins exactly.
+RELAY_BOUNDARIES = ("relay-after-take", "relay-after-run")
 EXIT_FAULT = 97
 
 _writes = 0
@@ -123,6 +125,9 @@ def supervisor_setup(node: str, activation: str) -> None:
     kind, _, value = rest.partition(":")
     if target == node and kind in ("write", "boundary") and value:
         _SUP.update(plan=(kind, value), spec=spec)
+    elif target in ("write", "boundary") and rest and ":" not in rest:
+        # v1.1.1 rows set the plan without a node (`boundary:relay-after-run`): it applies to every supervisor.
+        _SUP.update(plan=(target, rest), spec=spec)
     directory = os.environ.get("YGG_SUPERVISOR_TRACE_DIR")
     if directory:
         Path(directory).mkdir(parents=True, exist_ok=True)

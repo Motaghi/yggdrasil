@@ -1,5 +1,6 @@
 import os
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -75,3 +76,29 @@ def test_a_ref_named_like_a_short_id_cannot_stand_in(repo):
         subprocess.run(["git", "tag", staged[:length], clean], check=True)
     result = _scan("--staged")
     assert result.returncode == 1 and "staged content matches a denylist entry" in result.stderr
+
+
+# Sample tokens built from parts, so that the scan of this repository never reads this file as holding one.
+JWT = ("eyJ" + "hbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" + "." + "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwi"
+       "aWF0IjoxNTE2MjM5MDIyfQ" + "." + "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c")
+TWO_PART = "eyJ" + "hbGciOiJIUzI1NiJ9" + "." + "c2lnbmF0dXJlLXBhcnQ"
+LEGACY = "sk-" + "Ab1" * 11
+REFRESH = '{"refresh_token": "' + "rt_" + "x" * 30 + '"}'
+
+
+@pytest.mark.parametrize("text", [JWT, "token_" + TWO_PART, LEGACY, REFRESH,
+                                  '{"tokens": {"id_token": "' + JWT + '", "refresh_token": "' + "r" * 40 + '"}}'])
+def test_a_staged_token_shape_is_caught(repo, text):
+    (repo / "auth.json").write_text(text + "\n")
+    subprocess.run(["git", "add", "auth.json"], check=True)
+    result = _scan("--staged")
+    assert result.returncode == 1 and "staged content matches a secret shape" in result.stderr
+
+
+@pytest.mark.parametrize("text", ["eyJ" * 100000, "eyJ." + "a" * 9, "sk-" + "a" * 31, '{"refresh_token": "r1"}'])
+def test_near_misses_pass_and_a_long_run_of_jwt_prefixes_is_fast(repo, text):
+    (repo / "notes.txt").write_text(text + "\n")
+    subprocess.run(["git", "add", "notes.txt"], check=True)
+    started = time.monotonic()
+    assert _scan("--staged").returncode == 0
+    assert time.monotonic() - started < 10

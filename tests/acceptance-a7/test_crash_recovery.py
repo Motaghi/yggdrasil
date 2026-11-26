@@ -21,9 +21,11 @@ def _uncertain(observation, node):
     return bool(activations.intersection(observation["status"]["uncertain_keys"]))
 
 
-def _recover(driver, node, *, idempotent=True):
+def _recover(driver, node, *, agent_mode, idempotent=True):
     driver.run(*TICK)
     first = _observe(driver, node)
+    if first["live"] and agent_mode != "persist":
+        driver.wait_exit(node)
     driver.run(*TICK)
     second = _observe(driver, node)
     if _uncertain(first, node):
@@ -147,7 +149,7 @@ def test_launch_and_confirm_survive_every_write_crash(a7_tree):
             assert result.returncode == 97, fault
             _observe(driver, "pm1tl1")
 
-            final = _recover(driver, "pm1tl1")[-1]
+            final = _recover(driver, "pm1tl1", agent_mode="persist")[-1]
 
             assert final["starts"] == 1 or (
                 final["starts"] == 0 and (
@@ -169,7 +171,7 @@ def test_pause_during_launch_survives_every_write_crash(a7_tree):
             assert result.returncode in (0, 97), fault
             crashed = _observe(driver, "pm1tl1")
 
-            recovered = _recover(driver, "pm1tl1")
+            recovered = _recover(driver, "pm1tl1", agent_mode="persist")
 
             if result.returncode == 0:
                 assert all(observation["starts"] == crashed["starts"]
@@ -190,7 +192,7 @@ def test_acknowledgement_during_confirmation_survives_every_write_crash(a7_tree)
             assert result.returncode == 97, fault
             crashed = _observe(driver, "pm1tl1")
 
-            observations = [crashed, *_recover(driver, "pm1tl1")]
+            observations = [crashed, *_recover(driver, "pm1tl1", agent_mode="script")]
 
             for index, observation in enumerate(observations):
                 if any(record.get("exited_at") and record.get("exit_code") == 0
@@ -213,7 +215,7 @@ def test_checkpoint_batch_survives_every_write_crash(a7_tree):
             assert result.returncode == 97, fault
             _observe(driver, "pm1")
 
-            final = _recover(driver, "pm1")[-1]
+            final = _recover(driver, "pm1", agent_mode="script")[-1]
 
             assert final["starts"] <= 1, fault
 
@@ -231,7 +233,7 @@ def test_capacity_hold_and_rehydrate_survive_every_write_crash(a7_tree):
             driver.at("2026-11-16T10:02:00+01:00")
             driver.run("rehydrate")
             rehydrated = _observe(driver, "pm1tl1")
-            observations = [crashed, rehydrated, *_recover(driver, "pm1tl1")]
+            observations = [crashed, rehydrated, *_recover(driver, "pm1tl1", agent_mode="capacity")]
 
             for observation in observations:
                 assert observation["starts"] == 1, fault
@@ -286,7 +288,7 @@ def test_full_wipe_rehydrates_every_crashed_launch_state(a7_tree):
             driver.wipe_state()
             driver.run("rehydrate")
             _observe(driver, "pm1tl1")
-            final = _recover(driver, "pm1tl1", idempotent=False)[-1]
+            final = _recover(driver, "pm1tl1", agent_mode="persist", idempotent=False)[-1]
 
             assert (
                 final["status"]["uncertain_keys"] == captured["status"]["uncertain_keys"]

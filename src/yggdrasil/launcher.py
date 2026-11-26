@@ -302,8 +302,157 @@ def _finish_checkout(path: Path) -> None:
 
 
 def work_area(node: dict, nodes: dict) -> Path:
-    """The folder a node works in, computed without creating anything."""
+    """The folder a node works in, computed without creating anything.
+
+    A relayed call (YGG_VIA_RELAY) reads files only from its activation's relay `files` folder. A Codex builder's
+    work area is the one its own activation was given: the lane clone's checkout, the test checkout or the scratch
+    folder (v1.1.1, read from the activation's receipt)."""
+    via = util.env("YGG_VIA_RELAY")
+    if via:
+        return state.root() / "relay" / via / "files"
+    activation = util.env("YGG_ACTIVATION")
+    if activation and util.env("YGG_NODE") == node.get("id"):
+        data = receipt(activation)
+        if data.get("node") == node.get("id") and data.get("cli") == "codex" and data.get("box") and data.get("cwd"):
+            return Path(str(data["cwd"]))
     return working_directory(node, nodes, create=False)
+
+
+# ---------------------------------------------------------------- Codex builders (v1.1.1)
+
+CODEX_BUILDER_ROLES = ("pm", "tl", "worker", "su")
+GIT_KINDS = ("git-repo", "shared-tree")
+# EXTENSION POINTS (the lane-clone module fills them). LANE_BOX: function(node, nodes, lane_owner,
+# activation) -> dict with `box`, `checkout` (`<box>/checkout`), `box_device`, `box_inode` and `prompt` (lines for
+# the prompt: a replaced clone, the lane moved); it assembles or tends the lane's box and refuses (YggError)
+# when it cannot. TEST_BOX: function(node, nodes, activation, target) -> the same dict for a senior user's fresh
+# test clone of `target["branch"]` (detached at its head), at `<home>/.ygg-worktrees/<project>/test/<su>.<act>`.
+LANE_BOX = "laneclone:launch_box"
+TEST_BOX = "laneclone:test_box"
+RUNTIME_NAMES = {"codex": "Codex", "claude-code": "Claude Code"}
+
+
+def lane_owner_of(node: dict, nodes: dict) -> str | None:
+    """The team lead whose lane a team lead or worker works in, or None."""
+    if node.get("role") == "tl":
+        return node["id"]
+    if node.get("role") == "worker":
+        parent = nodes.get(node.get("parent"), {})
+        if parent.get("role") == "tl":
+            return parent["id"]
+    return None
+
+
+def lane_clone_record(project: str, owner: str) -> Path:
+    return state.root() / "lane-clones" / project / (owner + ".json")
+
+
+def lane_runtime(owner: str, nodes: dict) -> str:
+    """A lane's runtime (CB-D6): the kind of the existing lane (a clone record means a Codex lane, a worktree a
+    Claude Code lane), or, before the lane exists, its team lead's runtime resolved without a package."""
+    from . import models
+    lead = nodes.get(owner) or {}
+    project = lead.get("project")
+    if project:
+        if lane_clone_record(project, owner).exists():
+            return "codex"
+        try:
+            programme = tracker.programme(lead["programme"])
+            home = tracker.programme_home(programme)
+        except (YggError, KeyError):
+            home = None
+        if home and (Path(home) / ".ygg-worktrees" / project / "lane" / owner / ".git").exists():
+            return "claude-code"
+    return "codex" if models.is_codex(models.resolve_node(lead)["model"]) else "claude-code"
+
+
+def lane_runtime_refusal(subject: str, cli: str, owner: str, nodes: dict) -> str | None:
+    lane = lane_runtime(owner, nodes)
+    if lane == cli:
+        return None
+    project = (nodes.get(owner) or {}).get("project")
+    return (subject + " would run on " + RUNTIME_NAMES[cli] + " but lane ygg/" + str(project) + "/lane/" + owner +
+            " runs on " + RUNTIME_NAMES[lane] + "; a lane's team lead and workers use one runtime")
+
+
+def codex_preflight(node: dict, nodes: dict, cli: str) -> dict | None:
+    """At `ygg launch` and a conductor launch, before anything is reserved: one runtime per lane (CB-D6), Codex
+    workers only in a team lead's lane (CB-D9), and the version pin (CB-D13). Returns the pin's record for a Codex
+    launch (the project reviewer's is recorded only), else None."""
+    if cli == "codex" and node.get("role") in CODEX_BUILDER_ROLES:
+        # Fail closed: the hardened launch (box or scratch folder, relay, pinned
+        # temporary folders, command-line overrides, binary re-check) exists only for git programmes.
+        kind = (tracker.programme(node["programme"]) or {}).get("kind") if node.get("programme") else None
+        if kind not in GIT_KINDS:
+            raise util.refuse("launch precondition: Codex builders work only in git programmes; programme " +
+                              str(node.get("programme")) + " is of kind " + str(kind))
+    owner = lane_owner_of(node, nodes)
+    if cli == "codex" and node.get("role") == "worker" and owner is None:
+        raise util.refuse("launch precondition: " + node["id"] + " would run on Codex as a worker of " +
+                          str(node.get("parent")) + ", which is not a team lead; Codex workers work only in a "
+                          "team lead's lane")
+    if owner is not None and node.get("project"):
+        refusal = lane_runtime_refusal(node["id"], cli, owner, nodes)
+        if refusal:
+            raise util.refuse("launch precondition: " + refusal)
+    if cli != "codex":
+        return None
+    from . import codexlaunch
+    if node.get("role") in CODEX_BUILDER_ROLES:
+        found = codexlaunch.check_builder()
+        # The sign-in folder's checks, before anything is reserved: a builder whose login folder fails one never
+        # starts an activation. They run again when the links are written.
+        codexlaunch.checked_login()
+        return found
+    found = codexlaunch.probe(strict=False)
+    from . import codexsignin
+    # Every Codex launch while something exists at the login folder; the reviewer's other checks never refuse.
+    codexsignin.check_present_location(codexsignin.login_dir())
+    return found
+
+
+def is_codex_builder(data: dict) -> bool:
+    return data.get("cli") == "codex" and data.get("role") in CODEX_BUILDER_ROLES
+
+
+def _scratch(activation: str) -> dict:
+    """A PM's or idle senior user's scratch folder, fresh per activation, with its `tmp` and `tmp/cache`."""
+    root = util.ensure_dir(state.root() / "scratch")
+    folder = root / activation
+    folder.mkdir(mode=0o700)
+    (folder / "tmp").mkdir(mode=0o700)
+    (folder / "tmp" / "cache").mkdir(mode=0o700)
+    found = os.stat(folder, follow_symlinks=False)
+    return {"box": str(folder), "checkout": str(folder), "box_device": found.st_dev, "box_inode": found.st_ino,
+            "prompt": [], "kind": "scratch"}
+
+
+def codex_work_area(node: dict, nodes: dict, activation: str, testing_package: str | None) -> dict:
+    """Where a Codex builder works (CB-D2): a team lead or worker in its lane's box, a senior user with a package in
+    test in a fresh test clone, a PM or an idle senior user in a scratch folder. No Codex agent gets a linked
+    worktree of the home."""
+    role = node["role"]
+    if role in ("tl", "worker"):
+        owner = lane_owner_of(node, nodes)
+        function = _slot(LANE_BOX)
+        if function is None:
+            raise util.refuse("launch precondition: lane clones are not in this build")
+        found = dict(function(node, nodes, owner, activation))
+        found.setdefault("kind", "lane")
+        return found
+    if role == "su":
+        target = pinned_testing_target(node, nodes, testing_package) if testing_package else \
+            _testing_target(node, nodes)
+        if testing_package and target is None:
+            raise util.refuse(_LEFT_TESTING.format(testing_package))
+        if target:
+            function = _slot(TEST_BOX)
+            if function is None:
+                raise util.refuse("launch precondition: test clones are not in this build")
+            found = dict(function(node, nodes, activation, target))
+            found.setdefault("kind", "test")
+            return found
+    return _scratch(activation)
 
 
 # EXTENSION POINT (the launcher owns it, the review module fills it): the review a project reviewer's launch is for. A "module:function"
@@ -366,8 +515,37 @@ def review_checkout(home: str, path: Path, sha: str) -> Path:
     return path
 
 
+def clone_lane_owner(node: dict, nodes: dict) -> str | None:
+    """The team lead whose lane is a clone lane (v1.1.1), for a Codex team lead or a worker of one: the registry
+    decides for a lane that has a record; a new lane is a clone lane when its team lead runs on Codex."""
+    project = node.get("project")
+    owner = node["id"] if node.get("role") == "tl" else None
+    if node.get("role") == "worker" and (nodes.get(node.get("parent")) or {}).get("role") == "tl":
+        owner = node.get("parent")
+    if not owner or not project:
+        return None
+    from . import clones, models
+    record = clones.read(project, owner)
+    if record is not None:
+        return owner if record.get("kind") == "lane" else None
+    lead = nodes.get(owner) or {}
+    try:
+        codex = models.is_codex(models.resolve(owner)["model"]) if lead else False
+    except YggError:
+        codex = False
+    return owner if codex else None
+
+
+def _codex_node(node: dict) -> bool:
+    from . import models
+    try:
+        return models.is_codex(models.resolve(node["id"])["model"])
+    except YggError:
+        return False
+
+
 def working_directory(node: dict, nodes: dict, create: bool = True, review: dict | None = None,
-                      testing_package: str | None = None) -> Path:
+                      testing_package: str | None = None, activation: str | None = None) -> Path:
     programme = tracker.programme(node["programme"])
     home = tracker.programme_home(programme)
     kind = programme["kind"]
@@ -396,6 +574,14 @@ def working_directory(node: dict, nodes: dict, create: bool = True, review: dict
         parent = nodes.get(node.get("parent"), {})
         if parent.get("role") == "tl":
             lane_owner = parent["id"]
+    clone_owner = clone_lane_owner(node, nodes) if lane_owner else None
+    if clone_owner:
+        from . import clones
+        if not create:
+            record = clones.read(project, clone_owner) or {}
+            return Path(record["path"]) if record.get("path") else \
+                clones.lane_folder(home, project) / clones.box_name(clone_owner, 1) / "checkout"
+        return clones.lane_checkout(node, str(home), project, clone_owner, activation)
     if lane_owner:
         return ensure(home, base / project / "lane" / lane_owner,
                                "ygg/" + project + "/lane/" + lane_owner, integration)
@@ -405,6 +591,13 @@ def working_directory(node: dict, nodes: dict, create: bool = True, review: dict
         target = pinned_testing_target(node, nodes, testing_package) if testing_package else _testing_target(node, nodes)
         if testing_package and target is None:
             raise util.refuse(_LEFT_TESTING.format(testing_package))
+        if target and _codex_node(node):
+            # v1.1.1 (CB-D2): a testing Codex senior user works in a fresh test clone, never a linked worktree.
+            from . import clones
+            if not create:
+                found = clones.test_checkout_of(project, node["id"], activation) if activation else None
+                return found or clones.test_folder(home, project) / (node["id"] + ".planned") / "checkout"
+            return Path(clones.test_box(node, nodes, activation, target)["checkout"])
         ref = target["branch"] if target else integration
         return detached(home, base / project / ("_test-" + node["id"]), ref)
     return ensure(home, base / project / "_integration", integration, "main")
@@ -663,12 +856,17 @@ def settings_content(quoted_ygg: str, permissions: dict | None = None) -> dict:
     return content
 
 
-def inject_hooks(activation: str, cwd: Path, is_git: bool, home: str | None = None,
+CLONE_NOTES = {"clone-prompt.txt", "fast-forward"}
+
+
+def inject_hooks(activation: str, cwd: Path | None, is_git: bool, home: str | None = None,
                  permissions: dict | None = None) -> Path:
     ygg = ygg_executable()
     try:
         directory = state.root() / "launch" / activation
-        if directory.exists():
+        # A clone lane's tending (v1.1.1, clones.lane_checkout) may already have left its notes for the prompt here;
+        # anything else means the folder was used before.
+        if directory.exists() and set(os.listdir(directory)) - CLONE_NOTES:
             raise FileExistsError("launch directory exists: " + str(directory))
         util.ensure_dir(directory)
         settings = directory / "settings.json"
@@ -725,8 +923,6 @@ def model_for(node: dict) -> tuple[str, str, str]:
     if not MODEL_RE.match(model):
         raise util.refuse("launch precondition: invalid model name '" + model + "'")
     cli = "codex" if model.startswith("gpt") else "claude-code"
-    if cli == "codex" and node.get("role") in models.BUILDER_ROLES:
-        raise util.refuse(models.CODEX_REFUSAL)  # D1 (A11 seam, AC-99 row 2)
     if cli == "claude-code" and config.get("launcher_cli") == "codex" and node.get("role") != "reviewer":
         # A reviewer is exempt: the programme reviewer runs on Claude (D1), and a project reviewer falls back to the
         # builder's family or follows models.review_model, which may name a Claude model (A11 AC-56, AC-99 row 1).
@@ -1133,7 +1329,17 @@ def launch(node_id: str, *, reason: str = "launch", retries_used: int = 0, expli
             permissions.alert_needed(node)  # the conductor's launch waits on the user's agreement
         raise
     check_agent_env()
+    # v1.1.1: one runtime per lane, Codex workers in team-lead lanes, and the Codex version pin, all before
+    # anything is reserved or made (CB-D6, CB-D9, CB-D13).
+    codex_pin = codex_preflight(node, nodes, cli)
     use_t3 = t3.choose(cli)  # A5.3: versions read before anything is reserved; the fallback is logged
+    clone_owner = clone_lane_owner(node, nodes) if node.get("project") else None
+    if clone_owner:
+        # v1.1.1: a lane clone is assembled or recovered before anything is reserved (a crash leaves no reservation).
+        from . import clones
+        programme_record = tracker.programme(node["programme"])
+        if programme_record.get("kind") in ("git-repo", "shared-tree"):
+            clones.prepare_lane(node, str(tracker.programme_home(programme_record)), node["project"], clone_owner)
     with util.locked():
         if live_activations(node_id):
             # A7.5 (I1): whatever the runtime says, a node with a live activation process is never launched
@@ -1281,11 +1487,50 @@ def launch(node_id: str, *, reason: str = "launch", retries_used: int = 0, expli
             raise util.refuse(_LEFT_TESTING.format(testing_package))  # reopened since the reservation
         extra = dict({"review": review} if review else {}, **({"testing_package": testing_package}
                                                                if testing_package else {}))
-        cwd = working_directory(node, nodes, **extra)
+        area = None
+        if cli == "codex" and node["role"] in CODEX_BUILDER_ROLES and is_git:
+            # A Codex builder never gets a linked worktree of the home, and trusted git never runs in its box: the
+            # launch folder comes first (the box's tending may write into it), then the work area (CB-D2).
+            settings = inject_hooks(activation, None, False, tracker.programme_home(programme), None)
+            area = codex_work_area(node, nodes, activation, testing_package)
+            from . import clones
+            clones.flush_notes(activation)  # the clone's notes, now that the launch folder and work area exist
+            cwd = Path(str(area["checkout"]))
+            grant = None
+        else:
+            cwd = working_directory(node, nodes, **extra)
         # A T3 session is told to read its private prompt file first (t3.prompt_file): exactly that file.
         prompt = [state.root() / "launch" / activation / "prompt.md"] if use_t3 else None
-        grant = permissions.block(node, nodes, cwd, is_git, prompt, activation) if cli == "claude-code" else None
-        settings = inject_hooks(activation, cwd, is_git, tracker.programme_home(programme), grant)
+        if area is None:
+            grant = permissions.block(node, nodes, cwd, is_git, prompt, activation) if cli == "claude-code" else None
+            settings = inject_hooks(activation, cwd, is_git, tracker.programme_home(programme), grant)
+        codex_fields = {}
+        if cli == "codex":
+            # The hermetic Codex home for every Codex launch, the reviewer's included (CB-D10), and the version
+            # found (CB-D13; recorded, never checked, for the reviewer).
+            from . import codexlaunch
+            probed = node["role"] in CODEX_BUILDER_ROLES or bool((codex_pin or {}).get("probed"))
+            written = codexlaunch.write_home(activation, reviewer=node["role"] == "reviewer", probed=probed,
+                                             version=(codex_pin or {}).get("version"))
+            codexlaunch.write_version(activation, codex_pin or {"checked": False})
+            codex_fields["codex_pin"] = {k: (codex_pin or {}).get(k) for k in ("path", "identity", "version",
+                                                                              "probed", "checked")}
+            codex_fields["codex_home"] = str(codexlaunch.home_path(activation))
+            # Whether the home links the shared login (its supervisor then holds the sign-in lease), why a
+            # reviewer got no links, and the names its config keeps from the agent's commands.
+            codex_fields["codex_login_links"] = bool(written["links"])
+            codex_fields["codex_sign_in"] = written["sign_in"]
+            codex_fields["codex_exclude"] = list(written["excluded"])
+            # The exact login folder linked: the lease, and any holder after a crash, use this one, never a folder
+            # read again from configuration.
+            codex_fields["codex_login_dir"] = written["login"]
+        if area is not None:
+            from . import relay
+            codex_fields.update(relay.make_folder(activation))
+            codex_fields.update(box=str(area["box"]), box_device=area.get("box_device"),
+                                box_inode=area.get("box_inode"), box_kind=area.get("kind"),
+                                relay=str(relay.relay_root(activation)),
+                                prompt_lines=[str(line) for line in area.get("prompt") or []])
         route, t3_project = None, None
         if use_t3:
             # A5.1: the lane worktree is its own T3 project with the guard hook in its settings file; the
@@ -1296,6 +1541,10 @@ def launch(node_id: str, *, reason: str = "launch", retries_used: int = 0, expli
             route = t3.plan(node_id)
         from . import rehydrate
         rehydrate.write_document(node_id)
+        if cli == "codex":
+            from . import codexsignin
+            # The session's sign-in route; one log alert while it is none (best effort, never stops the launch).
+            codexsignin.note_launch(dict(receipt(activation), **codex_fields))
     except BaseException:
         with util.locked():
             commit_aborted(node_id, activation, "preparation failed")
@@ -1323,8 +1572,10 @@ def launch(node_id: str, *, reason: str = "launch", retries_used: int = 0, expli
             raise abort_error(node_id, activation, why)
         # The lane's git directories are recorded for T3 sessions too: the guard binds their git reads to them.
         update_receipt(activation, phase="starting", cwd=str(cwd), settings=str(settings), testing=testing,
-                       project_settings=project_settings(),
-                       **dict(zip(("git_dir", "git_common_dir"), lane_git_dirs(cwd) if is_git else (None, None))))
+                       project_settings=project_settings(), **codex_fields,
+                       **({"clone": area["pin"]} if area is not None and area.get("pin") else {}),
+                       **dict(zip(("git_dir", "git_common_dir"),
+                                  lane_git_dirs(cwd) if is_git and not codex_fields.get("box") else (None, None))))
     if use_t3:
         return t3.launch(node, activation, cwd, model, previous, route, t3_project)
     command = [sys.executable, "-m", "yggdrasil", "_supervise", activation]
@@ -1814,11 +2065,26 @@ AGENT_ENV_PREFIXES = ("LC_", "YGG_")
 CLI_ENV_NAMES = {
     "claude-code": {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN",
                     "CLAUDE_CONFIG_DIR"},
-    "codex": {"OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_HOME"},
+    "codex": {"OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_HOME", "CODEX_API_KEY"},
 }
+# Codex's own API key reaches only a Codex builder and a reviewer on a probed Codex version; it is removed after
+# every overlay from every other session, and never reaches a relayed `ygg`, a `t3` process or a helper.
+CODEX_API_KEY = "CODEX_API_KEY"
 # Yggdrasil variables that never pass to an agent: test controls and tracker credentials.
 # YGG_SUPERVISOR_FOR names the supervisor's own activation (reset verifies it); the agent never carries it.
-AGENT_ENV_DENIED = {"YGG_TEST_MODE", "YGG_NOW", "YGG_SUPERVISOR_FOR"}
+# The Codex pin's and the relay's test controls never reach an agent either (v1.1.1, CB-27); nor does a relay folder
+# or a relayed call's marker the launching process happens to carry.
+AGENT_ENV_DENIED = {"YGG_TEST_MODE", "YGG_NOW", "YGG_SUPERVISOR_FOR", "YGG_TEST_CODEX_VERSION", "YGG_TEST_PLATFORM",
+                    "YGG_TEST_RELAY_DELAY", "YGG_TEST_RELAY_HOLD", "YGG_TEST_ASSEMBLY_HOLD", "YGG_TEST_RELAY_SEQ",
+                    "YGG_RELAY", "YGG_VIA_RELAY", "YGG_RELAY_REQUEST"}
+# A relayed child's environment (v1.1.1): the agent allowlist and named values only. Besides the identity,
+# the nonce and the pinned roots it gets the configuration names an agent's own ygg reads to find its tracker,
+# safety folder and binaries, and, under YGG_TEST_MODE=1 only, the test controls and fixture names.
+RELAY_CONFIG_ENV = ("YGG_TRACKER", "YGG_SAFETY_ROOT", "YGG_PLATFORM_STATE", "YGG_RELEASE_FILE", "YGG_STANDARD_FILE",
+                    "YGG_CODEX_BIN", "YGG_CLAUDE_BIN", "YGG_GH_BIN", "YGG_T3_BIN")
+RELAY_TEST_ENV = ("YGG_TEST_MODE", "YGG_NOW", "YGG_TEST_CODEX_VERSION", "YGG_TEST_PLATFORM", "YGG_TEST_RELAY_DELAY",
+                  "YGG_TEST_RELAY_HOLD", "YGG_LINEAR_FAKE", "YGG_HOST_LOAD_FILE", "YGG_FAKE_LOG", "YGG_FAKE_CONFIG",
+                  "YGG_TEST_RELEASE_OFF")
 # Assigned by Yggdrasil for every agent; never inherited and never set by a launch overlay.
 IDENTITY_ENV = ("YGG_NODE", "YGG_ACTIVATION", "YGG_PROGRAMME", "YGG_PROJECT", "YGG_MODEL", "YGG_EFFORT")
 
@@ -1922,6 +2188,9 @@ def child_env(data: dict) -> dict:
         agent_config = agent_claude_dir()
         if agent_config is not None:
             environment["CLAUDE_CONFIG_DIR"] = str(agent_config)
+    if not codex_key_allowed(data):
+        # After every overlay, so neither agent_env_passthrough nor launch_env can bring it back.
+        environment.pop(CODEX_API_KEY, None)
     # Identity last, so nothing above can replace it.
     environment["YGG_NODE"] = data["node"]
     environment["YGG_ACTIVATION"] = data["activation"]
@@ -1930,6 +2199,29 @@ def child_env(data: dict) -> dict:
     environment["YGG_MODEL"] = str(data.get("model") or "")
     environment["YGG_EFFORT"] = str(data.get("effort") or "")
     return environment
+
+
+def codex_key_allowed(data: dict) -> bool:
+    """Whether a session gets CODEX_API_KEY: a Codex builder always (its version is always probed), the project
+    reviewer only on a probed Codex version, nothing else."""
+    if str(data.get("cli") or "") != "codex":
+        return False
+    if data.get("role") in CODEX_BUILDER_ROLES:
+        return True
+    return bool((data.get("codex_pin") or {}).get("probed"))
+
+
+def codex_session_env(data: dict | None = None) -> dict:
+    """The environment a Codex agent session gets, built by the launch's own function (the agent allowlist,
+    `agent_env_passthrough`, `launch_env`, then the removals). With no `data`, a Codex builder's session, which is
+    what `ygg doctor` judges the sign-in route by. Values are the session's; callers must never print them."""
+    session = {"node": "", "activation": "", "cli": "codex", "role": "tl", "pinned": {}}
+    session.update(data or {})
+    session["cli"] = "codex"
+    if session.get("role") == "reviewer":
+        # The reviewer's review folder is made by the launch; asking about its environment makes nothing.
+        session = dict(session, activation="")
+    return child_env(session)
 
 
 def lane_git_dirs(cwd) -> tuple[str | None, str | None]:
@@ -1973,36 +2265,75 @@ def claude_command(data: dict, environment: dict) -> tuple[list[str], dict]:
 
 
 def codex_sandbox(data: dict, node: dict) -> list[str]:
-    """Codex has no PreToolUse hook; it runs in its own sandbox (Threat model, stated gap).
+    """The sandbox flags of a Codex launch that is not a Codex builder's (the project reviewer, and staging-folder
+    work products). Codex has hooks of its own, and Yggdrasil disables them with the rest of the user's Codex
+    configuration (the hermetic Codex home, CB-D10). Builders get the per-role command line of
+    `codex_builder_command` instead.
 
-    Editing roles get workspace-write on their checkout. Senior users and reviewers get workspace-write
-    rooted in an empty scratch folder, so their checkout stays read-only, with only the state root and the
-    files-tracker root added as writable (`--add-dir`, codex-cli 0.166) for their `ygg` writes.
+    The reviewer gets workspace-write rooted in an empty scratch folder, with no writable state or tracker root
+    (AC-94 row 2). A senior user here gets the same; its `ygg` writes go through the relay (CB-D3).
     """
     pinned = data.get("pinned") or {}
     role = data.get("role") or node.get("role")
+    pinned = data.get("clone") or {}
+    if role == "su" and pinned.get("kind") == "test":
+        from . import clones
+        refusal = clones.pin_refusal(pinned)
+        if refusal:
+            raise util.refuse(refusal)
+        # The test clone's box is the sandbox root; its checkout is a repository by its registry record. No state
+        # or tracker root is writable; the relay folder is added where the Codex command line is assembled.
+        return ["--sandbox", "workspace-write", "--skip-git-repo-check", "--cd", str(pinned["box"])]
     if role in ("su", "reviewer"):
         scratch = state.root() / "scratch" / data["activation"]
         scratch.mkdir(parents=True, exist_ok=True)
-        # The scratch root is not a Git repository; codex exec refuses one without this flag.
-        args = ["--sandbox", "workspace-write", "--skip-git-repo-check", "--cd", str(scratch)]
-        if role == "reviewer":
-            # A reviewer writes only verdict.json into its scratch folder: no writable state or tracker folder
-            # (AC-94 row 2).
-            return args
-        for root in (pinned.get("YGG_STATE_ROOT"), pinned.get("YGG_FILES_ROOT")):
-            if root:
-                args += ["--add-dir", str(root)]
-        return args
+        # The scratch root is not a Git repository; codex exec refuses one without this flag. A reviewer writes
+        # only verdict.json into its scratch folder: no writable state or tracker folder (AC-94 row 2). The state
+        # and tracker roots that a senior user got here before v1.1.1 were the record-forging route CB-D3
+        # rejects; its `ygg` calls go through the relay.
+        del pinned
+        return ["--sandbox", "workspace-write", "--skip-git-repo-check", "--cd", str(scratch)]
     args = ["--sandbox", "workspace-write"]
+    from . import clones
+    if data.get("clone"):
+        # A clone is a repository by the identity its launch pinned; a superseded generation never starts, and
+        # trusted git never runs in any box (invariant T).
+        refusal = clones.pin_refusal(data["clone"])
+        if refusal:
+            raise util.refuse(refusal)
+        return args
+    if clones.clone_path(data.get("cwd")):
+        raise util.refuse("launch precondition: " + str(data.get("cwd")) + " is in a clone folder and this "
+                          "activation has no clone record; it does not start")
     if not _inside_git(data.get("cwd")):
         args.append("--skip-git-repo-check")  # staging folders of non-Git work-product kinds
     return args
 
 
+def clone_refusal(data: dict) -> str | None:
+    """For an activation whose launch pinned a clone: why it must not start (a superseded generation, a replaced
+    box), or None. Checked before the command line is built and again at the final admission check. Also refuses a
+    Codex builder whose box sits under a path holding os.pathsep: git splits GIT_CEILING_DIRECTORIES on it, so the
+    ceiling would not stop discovery and git from the box root would select the home repository."""
+    if is_codex_builder(data) and data.get("box"):
+        parent = str(Path(str(data["box"])).parent)
+        if os.pathsep in parent:
+            return ("the Codex builder's work area " + parent + " contains '" + os.pathsep + "', which git reads as "
+                    "a separator in GIT_CEILING_DIRECTORIES, so git from the box root would find the home "
+                    "repository; move the programme home (or the state root) to a path without '" + os.pathsep +
+                    "'")
+    if not data.get("clone"):
+        return None
+    from . import clones
+    return clones.pin_refusal(data["clone"])
+
+
 def _inside_git(path) -> bool:
     if not path:
         return False
+    from . import quarantine
+    if quarantine.is_clone_checkout(path):
+        return True  # a clone (v1.1.1): never asked through git in the box
     result = git("-C", path, "rev-parse", "--is-inside-work-tree")
     return result.returncode == 0 and result.stdout.strip() == "true"
 
@@ -2057,7 +2388,18 @@ def _supervise(activation: str) -> int:
                    "test it now against its acceptance criteria, then record `ygg acceptance record --from " +
                    str(data["node"]) + " --package " + str(testing.get("package")) +
                    " --sha <that sha> --verdict accept|reject`. Nobody else will ask you to.")
-    if cli == "codex":
+    notes = state.root() / "launch" / activation / "clone-prompt.txt"
+    if notes.is_file():
+        prompt += "\n\n" + notes.read_text().strip()  # the clone's tending at launch (clones.lane_checkout)
+    pinned_refusal = clone_refusal(data)
+    builder = is_codex_builder(data) and bool(data.get("box"))
+    if pinned_refusal:
+        argv, stdin_text, environment = None, prompt, child_env(data)  # refused below; no command line is built
+    elif builder:
+        argv = codex_builder_command(data)
+        stdin_text = prompt + codex_prompt(data, node)
+        environment = codex_builder_env(data)
+    elif cli == "codex":
         argv = [util.env("YGG_CODEX_BIN", "codex"), "exec"] + codex_sandbox(data, node) + ["-m", data["model"]]
         if effort:
             argv += ["-c", "model_reasoning_effort=" + effort]
@@ -2066,6 +2408,9 @@ def _supervise(activation: str) -> int:
         argv.append("-")
         stdin_text = prompt
         environment = child_env(data)
+        if data.get("codex_home"):
+            # The reviewer gets the hermetic Codex home through its environment only (CB-D10, A11 AC-94 row 2).
+            environment["CODEX_HOME"] = str(data["codex_home"])
     else:
         argv, environment = claude_command(data, child_env(data))
         # The prompt reaches Claude Code on standard input, never as an argument.
@@ -2110,29 +2455,49 @@ def _supervise(activation: str) -> int:
             if lifecycle.terminal_of(lifecycle.facts(_programme(node_id), activation)) is not None:
                 refusal = "ended"
             else:
-                refusal = hold_reason(node, activation)
+                refusal = pinned_refusal or clone_refusal(data) or hold_reason(node, activation)
     except YggError as error:
         refusal = "journal unreadable: " + error.message
     process = None
     spawn_error = None
+    lease = None
+    if refusal is None and data.get("codex_login_links"):
+        # The sign-in lease: shared, on the login folder, so `ygg codex logout` waits while this session runs.
+        # Taken after the gate and before the creation lock, never under the journal lock or the creation lock,
+        # through a descriptor Codex does not inherit, waiting at most 10 seconds (on a timeout Codex starts
+        # anyway; a logout that ran in between leaves it with no sign-in, which fails inside Codex). The
+        # activation's holder lock goes with it, so recovery starts no second holder while this one lives.
+        lease = take_sign_in_lease(data)
     if refusal is None:
         # Step 2, under the creation lock and with local files only: the interlock markers and the
         # revocation record; then the agent is created and its identity recorded before the lock goes.
         with util.locked(util.CREATION_LOCK):
             refusal = _local_refusal(node, activation)
+            work_fd = None
+            if refusal is None and builder:
+                # The box by descriptor, checked against the record, and the agent started from it (CB-D14); the
+                # Codex binary must still be the one the pin checked.
+                work_fd, refusal = _open_work_area(data)
             if refusal is None:
                 try:
                     out, err = output_files(activation)
                     try:
                         # The prompt goes on standard input; the output is kept in private files.
-                        process = subprocess.Popen(argv, cwd=data["cwd"], env=environment,
-                                                   stdin=subprocess.PIPE, stdout=out, stderr=err, text=True,
-                                                   start_new_session=True)
+                        if work_fd is not None:
+                            process = subprocess.Popen(argv, env=environment, stdin=subprocess.PIPE, stdout=out,
+                                                       stderr=err, text=True, start_new_session=True,
+                                                       preexec_fn=_fchdir(work_fd))
+                        else:
+                            process = subprocess.Popen(argv, cwd=data["cwd"], env=environment,
+                                                       stdin=subprocess.PIPE, stdout=out, stderr=err, text=True,
+                                                       start_new_session=True)
                     finally:
                         out.close()
                         err.close()
                 except OSError as error:
                     spawn_error = str(error)
+                finally:
+                    _close_fds(work_fd)
                 if process is not None:
                     faults.boundary("after-spawn")  # A7.2: agent started, pid not yet recorded
                     update_receipt(activation, pid=process.pid, process_started_at=util.process_start(process.pid))
@@ -2142,6 +2507,8 @@ def _supervise(activation: str) -> int:
                                       {"activation": activation, "reason": refusal or "spawn-failed",
                                        "at": util.iso()})
     if process is None:
+        release_sign_in_lease(lease)
+        _drop_login_links(activation)
         if not lifecycle.no_agent_path(activation).exists():
             # Every refusal leaves positive no-agent evidence locally before any journal write.
             lifecycle.write_local(lifecycle.no_agent_path(activation),
@@ -2159,23 +2526,17 @@ def _supervise(activation: str) -> int:
                 lifecycle.no_agent_path(activation).unlink(missing_ok=True)
         except YggError:
             pass  # the no-agent record stays; recovery turns it into `aborted` once the tracker is back
+        if data.get("relay"):
+            from . import relay
+            relay.archive(activation)  # no agent ever ran: the empty relay folder joins the output folder
+        remove_scratch(activation, data)
+        from . import clones
+        clones.settle_test_clone(data)  # a test clone goes at settlement too (invariant T rule 3)
         return 0 if spawn_error is None else 1
 
-    def forward(signum, frame):
-        try:
-            os.killpg(process.pid, signum)
-        except ProcessLookupError:
-            pass
-
-    signal.signal(signal.SIGTERM, forward)
-    # The prompt reaches the agent on standard input, which is then closed.
-    process.communicate(input=stdin_text)
-    code = process.returncode
-    # The exit is recorded only once the agent's whole process group is gone (AC-71 row 3): a
-    # child it left behind still works in the lane.
-    from . import interlock
-    while interlock.group_alive(process.pid):
-        time.sleep(0.2)
+    code = _supervise_loop(activation, process, stdin_text, data, node)
+    release_sign_in_lease(lease)  # held until Codex's whole process group is gone
+    _drop_login_links(activation)  # the supervisor's end is a settlement: no live link stays in the launch folder
     faults.boundary("after-exit")  # A7.2: agent exited, exit not yet recorded
     tail = "\n".join(_tail(output_path(activation, "stderr")).splitlines()[-20:])
     if code is not None and code < 0:
@@ -2220,6 +2581,220 @@ def _supervise(activation: str) -> int:
         except YggError:
             pass  # the conductor's next pass reports the hold
     return 0
+
+
+SIGN_IN_LEASE_SECONDS = 10.0
+
+
+def take_sign_in_lease(data: dict | None = None) -> tuple | int | None:
+    """The shared sign-in lease, or None (no login, or not had within the bound). With an activation's record:
+    on the login folder recorded at its launch, together with the activation's holder lock, as one value for
+    `release_sign_in_lease`."""
+    from . import codexlaunch, codexsignin
+    try:
+        if data is None:
+            return codexsignin.take_lease_shared(SIGN_IN_LEASE_SECONDS)
+        claim = codexlaunch.claim_holder(codexlaunch.holder_lock_path(str(data["activation"])))
+        login = data.get("codex_login_dir")
+        lease = codexlaunch.take_lease_at(Path(login), SIGN_IN_LEASE_SECONDS) if login else \
+            codexsignin.take_lease_shared(SIGN_IN_LEASE_SECONDS)
+        return (claim, lease)
+    except (OSError, YggError):
+        return None
+
+
+def release_sign_in_lease(lease) -> None:
+    for descriptor in (lease if isinstance(lease, tuple) else (lease,)):
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def _drop_login_links(activation: str) -> None:
+    from . import codexlaunch
+    codexlaunch.drop_links(activation)
+
+
+def _fchdir(descriptor: int):
+    def change() -> None:
+        os.fchdir(descriptor)
+    return change
+
+
+def _close_fds(found) -> None:
+    for descriptor in (found if isinstance(found, tuple) else (found,)):
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def _open_work_area(data: dict):
+    """(descriptor of the folder the agent starts in, None) or (None, refusal). The box is opened with O_DIRECTORY
+    and O_NOFOLLOW and compared with the recorded device and inode; a clone's `checkout` is opened from that
+    descriptor the same way (CB-D14). The Codex binary is stat'ed again just before the spawn (CB-D13)."""
+    from . import codexlaunch
+    pin = data.get("codex_pin") or {}
+    if pin.get("path") and pin.get("identity") is not None and not codexlaunch.same_binary(pin):
+        return None, "launch precondition: " + codexlaunch.version_refusal(codexlaunch.UNKNOWN_VERSION, None)
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        box = os.open(str(data["box"]), flags)
+    except OSError as error:
+        return None, "launch precondition: the box " + str(data["box"]) + " cannot be opened: " + str(error.strerror)
+    found = os.fstat(box)
+    if (found.st_dev, found.st_ino) != (data.get("box_device"), data.get("box_inode")):
+        os.close(box)
+        return None, "launch precondition: the box " + str(data["box"]) + " was replaced"
+    if data.get("box_kind") == "scratch":
+        return box, None
+    try:
+        work = os.open("checkout", flags, dir_fd=box)
+    except OSError as error:
+        os.close(box)
+        return None, "launch precondition: the checkout of " + str(data["box"]) + " cannot be opened: " + \
+            str(error.strerror)
+    os.close(box)
+    return work, None
+
+
+def codex_builder_command(data: dict) -> list[str]:
+    """The Codex command line of a PM, team lead, worker or senior user (v1.1.1, "The Codex command line")."""
+    from . import codexlaunch
+    binary = (data.get("codex_pin") or {}).get("path") or util.env("YGG_CODEX_BIN", "codex")
+    relay_in = str(Path(str(data["relay"])) / "in")
+    argv = [str(binary), "exec", "--sandbox", "workspace-write", "--skip-git-repo-check", "--cd", str(data["box"]),
+            "--add-dir", relay_in] + codexlaunch.critical_overrides(data.get("codex_exclude")) + \
+        ["-m", str(data["model"])]
+    if data.get("effort"):
+        argv += ["-c", "model_reasoning_effort=" + str(data["effort"])]
+    argv.append("-")  # the prompt goes on standard input, never on the command line
+    return argv
+
+
+def codex_builder_env(data: dict) -> dict:
+    """Today's agent environment plus the relay folder, the hermetic Codex home and temporary folders inside the
+    work area, pinned like the identity variables (v1.1.1, "Environment")."""
+    environment = child_env(data)
+    temporary = Path(str(data["box"])) / "tmp"
+    for key in ("TMPDIR", "TMP", "TEMP"):
+        environment[key] = str(temporary)
+    environment["XDG_CACHE_HOME"] = str(temporary / "cache")
+    environment["CODEX_HOME"] = str(data.get("codex_home") or "")
+    environment["YGG_RELAY"] = str(data["relay"])
+    # Codex runs every command in the box root, whose `.git` is the empty anchor; without a ceiling git would walk
+    # up and select the home repository. Git never stops at a ceiling equal to the folder it starts in, so the
+    # ceiling is the box's parent: git from the box root finds no repository, git in the checkout finds the clone.
+    environment["GIT_CEILING_DIRECTORIES"] = str(Path(str(data["box"])).parent)
+    return environment
+
+
+CODEX_INBOX_LINE = ("You get no inbox notice on this runtime: run ygg inbox <node> before each commit, each push and "
+                    "each ygg wp ready.")
+
+
+def codex_prompt(data: dict, node: dict) -> str:
+    """The Codex builder's own prompt lines (A11 AC-92 and v1.1.1, "Prompt")."""
+    lines = []
+    if node.get("role") in ("tl", "worker"):
+        lines.append(CODEX_INBOX_LINE.replace("<node>", str(node["id"])))
+        lines.append("Your checkout is " + str(data.get("cwd")) + ". Your work reaches the project only through ygg "
+                     "wp ready; git push is neither needed nor possible from your clone. Temporary files go to "
+                     "$TMPDIR.")
+    elif data.get("box_kind") == "scratch":
+        lines.append("You work in the scratch folder " + str(data.get("cwd")) + "; temporary files go to $TMPDIR.")
+    lines += [str(line) for line in data.get("prompt_lines") or []]
+    return ("\n\n" + "\n".join(lines)) if lines else ""
+
+
+def _supervise_loop(activation: str, process, stdin_text: str, data: dict, node: dict):
+    """Write the prompt, then answer the relay while the agent's group lives (v1.1.1, "Server: the supervisor
+    loop"): one relayed request at a time, none once the group is gone, the relay drained and archived before the
+    exit is recorded. The exit counts only once the agent's whole process group is gone (AC-71 row 3)."""
+    import threading
+    from . import interlock, lifecycle
+    server = None
+    data = receipt(activation) or data
+    if data.get("relay"):
+        from . import relay
+        try:
+            server = relay.Server(activation, data, node)
+        except OSError:
+            server = None
+    stopping = {"signal": False}
+
+    def forward(signum, frame):
+        stopping["signal"] = True
+        try:
+            os.killpg(process.pid, signum)
+        except ProcessLookupError:
+            pass
+        if server is not None and server.child is not None:
+            try:
+                os.killpg(server.child["process"].pid, signum)
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+
+    signal.signal(signal.SIGTERM, forward)
+
+    def write_prompt() -> None:
+        try:
+            process.stdin.write(stdin_text)
+        except (BrokenPipeError, OSError, ValueError):
+            pass
+        try:
+            process.stdin.close()
+        except (BrokenPipeError, OSError, ValueError):
+            pass
+
+    writer = threading.Thread(target=write_prompt, name="prompt-writer", daemon=True)
+    writer.start()
+    signalled = lifecycle.signalled_path(activation)
+    while True:
+        alive = process.poll() is None or interlock.group_alive(process.pid)
+        if server is None:
+            if not alive:
+                break
+            time.sleep(0.1)  # the spec's one turn length, with or without a relay: the exit is recorded promptly
+            continue
+        if stopping["signal"] or signalled.exists():
+            server.stop()
+        server.turn(alive)
+        if not alive and server.child is None:
+            break
+        time.sleep(0.1)
+    writer.join(timeout=5)
+    if server is not None:
+        from . import relay
+        server.drain()
+        server.close_descriptors()
+        relay.archive(activation)
+    remove_scratch(activation, data)
+    from . import clones
+    clones.settle_test_clone(data)  # a test clone goes once its agent's group is gone (invariant T rule 3)
+    return process.returncode
+
+
+def remove_scratch(activation: str, data: dict) -> None:
+    """A PM's or idle senior user's scratch folder is deleted at settlement (invariant T rule 3): renamed into
+    `<state root>/scratch/_removing/` first, then removed without following any link. Repeating it is harmless."""
+    if data.get("box_kind") != "scratch" or not data.get("box"):
+        return
+    folder = Path(str(data["box"]))
+    if folder != state.root() / "scratch" / activation:
+        return
+    removing = util.ensure_dir(state.root() / "scratch" / "_removing")
+    target = removing / activation
+    try:
+        if folder.is_dir() and not folder.is_symlink():
+            os.rename(folder, target)
+    except OSError:
+        return
+    if target.is_dir() and not target.is_symlink() and getattr(shutil.rmtree, "avoids_symlink_attacks", False):
+        shutil.rmtree(target, ignore_errors=True)
 
 
 def output_path(activation: str, stream: str) -> Path:

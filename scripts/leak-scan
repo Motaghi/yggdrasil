@@ -23,7 +23,35 @@ SECRET = re.compile(
     r"|lin_(?:api|oauth)_[A-Za-z0-9]{8,}"
     r"|(?:AKIA|ASIA)[A-Z0-9]{16}"
     r"|xox[abposr]-[A-Za-z0-9-]{10,}"
-    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----")
+    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----"
+    # What a copied Codex login holds, as Yggdrasil redacts it: a legacy OpenAI key and a refresh_token value.
+    r"|(?<![A-Za-z0-9])sk-[A-Za-z0-9]{32,}"
+    r'|\\?"refresh_token\\?"\s*:\s*\\?"[^"\\]{20,}')
+JWT_RUN = re.compile(r"[A-Za-z0-9_-]*")
+
+
+def has_jwt(text):
+    """Whether `text` holds a JSON Web Token: `eyJ` with two dot-separated parts of at least 10 characters each
+    (the three-part form and the two-part reading), found as Yggdrasil finds it, in linear time. Within one run of
+    token characters only the first `eyJ` can start a match."""
+    pos = 0
+    while True:
+        start = text.find("eyJ", pos)
+        if start < 0:
+            return False
+        first = JWT_RUN.match(text, start).end()
+        if text.startswith(".", first):
+            second = JWT_RUN.match(text, first + 1).end()
+            if second - first - 1 >= 10:
+                if text.startswith(".", second) and JWT_RUN.match(text, second + 1).end() - second - 1 >= 10:
+                    return True
+                if first - start >= 13:
+                    return True
+        pos = first
+
+
+def secret(text):
+    return bool(SECRET.search(text)) or has_jwt(text)
 
 
 # A full object id (SHA-1 or SHA-256), which git never reads as a ref name.
@@ -118,7 +146,7 @@ def scan_staged(terms):
         data = git("cat-file", "blob", meta[3], text=False).decode("utf-8", "replace")
         if has_term(data, terms):
             problems.append("staged content matches a denylist entry")
-        if SECRET.search(data):
+        if secret(data):
             problems.append("staged content matches a secret shape")
     allowed = public_identities()
     for variable in ("GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"):
@@ -137,7 +165,7 @@ def scan_message(path, terms):
     problems = []
     if has_term(text, terms):
         problems.append("commit message matches a denylist entry")
-    if SECRET.search(text):
+    if secret(text):
         problems.append("commit message matches a secret shape")
     return problems
 
@@ -147,7 +175,7 @@ def scan_history(refs, terms):
     allowed = public_identities()
     for sha in git("rev-list", *refs).split():
         message = git("log", "-1", "--format=%B", sha)
-        if has_term(message, terms) or SECRET.search(message):
+        if has_term(message, terms) or secret(message):
             findings.append(sha + " commit message")
         for label, fmt in (("author", "%an <%ae>"), ("committer", "%cn <%ce>")):
             if identity_hit(git("log", "-1", "--format=" + fmt, sha).strip(), terms, allowed):
@@ -160,7 +188,7 @@ def scan_history(refs, terms):
                 continue
             blob = meta[3]
             data = git("cat-file", "blob", blob, text=False).decode("utf-8", "replace")
-            if has_term(data, terms) or SECRET.search(data):
+            if has_term(data, terms) or secret(data):
                 findings.append(sha + " content " + path)
             if has_term(path, terms):
                 findings.append(sha + " path " + path)

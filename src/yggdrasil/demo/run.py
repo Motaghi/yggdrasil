@@ -40,6 +40,10 @@ NARRATION = {1: "brief written", 2: "plan approved", 3: "WP-1 ready for review",
 WAITING_FOR = {2: "the plan to be ready", 3: "WP-1's review", 4: "WP-2's review", 5: "both reviews to be approved",
                6: "the project to be ready to merge", 7: "the project to close"}
 GITCONFIG = "[user]\n\tname = Yggdrasil Demo\n\temail = demo@example.invalid\n"
+# The demo's Codex sessions run the scripted stand-in, which calls no model; this provider gives them a sign-in
+# route (a provider with no key) so they start like a signed-in user's, and nothing ever connects to it.
+CODEX_CONFIG = ('model_provider = "ygg-demo"\n\n[model_providers.ygg-demo]\nname = "Yggdrasil demo stand-in"\n'
+                'base_url = "http://127.0.0.1:9/v1"\n')
 # What `ygg demo --cleanup` checks and reads inside a folder: every folder below these is walked.
 CHECKED_FOLDERS = ("state", "state.safety", "tracker", "userhome", "home")
 TOP_FILES = ("demo-marker.json", "conductor.pid", "dashboard.pid")
@@ -147,15 +151,15 @@ def _alive(pid: int) -> bool | None:
         return False
     except PermissionError:
         return True
-    except OSError:
-        return None
+    except (OSError, OverflowError):
+        return None  # OverflowError: a pid outside the system's pid range
     try:
         waited, _ = os.waitpid(pid, os.WNOHANG)
         if waited == pid:
             return False  # this process's own child, just reaped
     except ChildProcessError:
         pass
-    except OSError:
+    except (OSError, OverflowError):
         return None
     status = None
     try:
@@ -768,29 +772,95 @@ def _write(path: Path, text: str, mode: int = 0o600) -> None:
         handle.write(text)
 
 
-def _marker(root: Path) -> dict | None:
+MARKER_LIMIT = 64 * 1024  # bytes; a real marker is a few hundred
+PID_MAX = 2 ** 31 - 1  # the largest pid any supported system hands out
+DEMO_NAME = re.compile(r"ygg-demo-[A-Za-z0-9_]+")  # the names tempfile.mkdtemp makes with that prefix
+
+
+def _marker_text(folder_fd: int) -> str | None:
+    """demo-marker.json's text, opened through the folder's descriptor without following a symlink and without
+    blocking on a FIFO or device. None when it is missing, not a regular file owned by this user, larger than
+    MARKER_LIMIT or not text."""
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        data = _json(PathFolder(root), "demo-marker.json")
-    except Unsafe:
-        return None  # an unreadable marker: not a demo this run can judge
+        descriptor = os.open("demo-marker.json", flags, dir_fd=folder_fd)
+    except OSError:
+        return None
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+            return None
+        data = b""
+        while len(data) <= MARKER_LIMIT:
+            chunk = os.read(descriptor, MARKER_LIMIT + 1 - len(data))
+            if not chunk:
+                break
+            data += chunk
+        return data.decode() if len(data) <= MARKER_LIMIT else None
+    except (OSError, UnicodeDecodeError):
+        return None
+    finally:
+        os.close(descriptor)
+
+
+def _marker(root: Path) -> dict | None:
+    """The folder's marker; None when the folder is not a real directory owned by this user, or the marker can't
+    be read safely or is not a JSON object: not a demo this run can judge."""
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        folder_fd = os.open(root, flags)
+    except OSError:
+        return None
+    try:
+        info = os.fstat(folder_fd)
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+            return None
+        text = _marker_text(folder_fd)
+    except OSError:
+        return None
+    finally:
+        os.close(folder_fd)
+    if text is None:
+        return None
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return None
     return data if isinstance(data, dict) else None
 
 
 def left_behind(tmp: str) -> list[str]:
-    """`ygg-demo-*` folders in `tmp` whose driver is gone without finishing teardown."""
+    """`ygg-demo-*` folders in `tmp` whose driver is gone without finishing teardown. Only real directories owned
+    by this user with mode 700, with a name tempfile.mkdtemp could have made and a marker naming a valid driver
+    pid, count."""
     found = []
     try:
         names = sorted(os.listdir(tmp))
     except OSError:
         return found
     for name in names:
-        if not name.startswith("ygg-demo-"):
+        if not DEMO_NAME.fullmatch(name):
             continue
         folder = os.path.join(tmp, name)
+        try:
+            info = os.lstat(folder)
+        except OSError:
+            continue
+        # The same top-level checks `ygg demo --cleanup` makes on the folder itself (a real directory, this user's,
+        # mode 700). Cleanup also walks the folder's contents and checks the recorded processes' ages, so it can
+        # still refuse a folder this scan lists.
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            continue
         marker = _marker(Path(folder))
         if not marker or marker.get("root") != os.path.realpath(folder) or marker.get("ended") is not False:
             continue
-        if same(_int(marker.get("driver_pid")), marker.get("driver_started")):
+        driver = _int(marker.get("driver_pid"))
+        if driver is None or not 2 <= driver <= PID_MAX:
+            continue  # no pid a real driver could have had: not a demo this scan can judge
+        try:
+            if same(driver, marker.get("driver_started")):
+                continue
+        except (OSError, OverflowError, ValueError, TypeError):
             continue
         found.append(folder)
     return found
@@ -1063,8 +1133,8 @@ class Driver:
         if not git:
             raise Failure("setup-early", "git not found on PATH")
         for folder in left_behind(tempfile.gettempdir()):
-            _out("demo: an earlier demo was left in " + folder + "; to stop it and remove it, run: "
-                 "ygg demo --cleanup " + folder)
+            _out("demo: an earlier demo was left in " + _sh(folder) + "; to stop it and remove it, run: "
+                 "ygg demo --cleanup " + _sh(folder))
         made = tempfile.mkdtemp(prefix="ygg-demo-")
         self.root = Path(made)
         self.shown_root = made
@@ -1075,6 +1145,8 @@ class Driver:
             (self.root / name).mkdir(mode=0o700)
         self.log = open(self.root / "demo.log", "a")  # noqa: SIM115 (open for the whole run)
         _write(self.root / "userhome" / ".gitconfig", GITCONFIG)
+        (self.root / "userhome" / ".codex").mkdir(mode=0o700)
+        _write(self.root / "userhome" / ".codex" / "config.toml", CODEX_CONFIG)
         _write(self.root / "config.yaml", config_text(fast=self.fast))
         _write(self.root / "profile.yaml", profile_text(made))
         _write(self.root / "brief.md", script.BRIEF)

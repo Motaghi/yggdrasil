@@ -194,6 +194,8 @@ def inbox(node_id: str, ack: str | None = None) -> str:
             for item in items:
                 if item["msg_id"] == ack and not item.get("acked_at"):
                     item["acked_at"] = util.iso()
+                    if util.env("YGG_VIA_RELAY"):
+                        item["read_via_relay"] = util.env("YGG_VIA_RELAY")
                     bound_to = _running_activation(node_id)
                     if bound_to is not None:
                         item["bound"] = bound_to  # back to unread if that activation doesn't consume it
@@ -230,12 +232,13 @@ def inbox(node_id: str, ack: str | None = None) -> str:
         return "acknowledged " + ack + "\n"
     lines = []
     from . import workahead
-    listed = [item for item in state.inbox(node_id) if not item.get("acked_at")]
+    # Unread messages, and (v1.1.1, CB-04 and CB-17) the ones a Codex agent read through the relay, marked so.
+    listed = [item for item in state.inbox(node_id) if not item.get("acked_at") or item.get("read_via_relay")]
     listed.sort(key=lambda item: 0 if item.get("urgent") else 1)  # urgent first (AC-52), stable otherwise
     for item in listed:
         if workahead.hidden(node_id, item):
             continue  # refers to a blocked later-stage package: not shown until it may start
-        kind = item["kind"] + (", urgent" if item.get("urgent") else "")
+        kind = item["kind"] + (", urgent" if item.get("urgent") else "") + (", read" if item.get("acked_at") else "")
         lines.append(item["msg_id"] + " from " + item["from"] + " [" + kind + "]\n"
                      + "```text\n" + item["body"] + "\n```")
     return ("\n".join(lines) + "\n") if lines else ""
@@ -289,6 +292,7 @@ def unbind_unconsumed() -> None:
                 continue
             item["acked_at"] = None
             item.pop("bound", None)
+            item.pop("read_via_relay", None)
             changed = True
         if changed:
             with util.locked():

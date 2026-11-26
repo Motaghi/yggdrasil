@@ -131,11 +131,23 @@ def node_add(node_id, role, parent, pairs_with=None):
             if target.get("role") != "tl" or target.get("project") != project:
                 raise util.usage("--pairs-with must name team leads of project " + str(project) + ": '" +
                                  paired + "'")
-        from . import models
-        # D1: Codex builds are planned for a later release (A11 seam, AC-99 row 2).
-        models.refuse_codex_builder(dict(entry, project=project, programme=parent_node.get("programme")))
         tracker.add_node_entry(tracker.nodes_file(project), entry)
     return "node " + node_id + " added\n"
+
+
+def codex_package_refusal(lane_node: dict, package: str, nodes: dict) -> None:
+    """`ygg wp authorise` (v1.1.1): a Codex package goes only to a team lead's lane (CB-D9), and a package runs on
+    its lane's runtime (CB-D6)."""
+    from . import launcher, models
+    cli = "codex" if models.is_codex(models.resolve_node(lane_node, package)["model"]) else "claude-code"
+    if lane_node.get("role") == "su":
+        if cli == "codex":
+            raise util.refuse(package + " would run on Codex on lane " + lane_node["id"] + ", which is a senior "
+                              "user; Codex packages go only to team-lead lanes")
+        return
+    refusal = launcher.lane_runtime_refusal(package, cli, lane_node["id"], nodes)
+    if refusal:
+        raise util.refuse(refusal)
 
 
 def project_collapsed(project: str) -> bool:
@@ -167,10 +179,14 @@ PID_READY_REFUSAL = "pid-ready is only for a new, rejected or replanned PID"
 
 
 def _replan_decided(project_name) -> bool:
-    """True when the newest follow-up decision of a rejected exception plan was answered `replan`."""
-    # The follow-up is found by the `exception` key that only `exception_decide` writes, never by its question
-    # text, and only a user's answer counts: an agent can raise a decision with any question, and inside an
-    # envelope a provisional decision is answered by the envelope, not by the user.
+    """True when the user answered `replan` on the follow-up decision of the newest exception, rejected.
+
+    The follow-up is normally found by the `exception` key that `exception_decide` writes. Version 1.0.0 wrote
+    the same follow-up without that key, so when the newest rejected exception has no linked follow-up, a
+    decision written by 1.0.0's `exception_decide` counts instead: see `_legacy_follow_up`.
+    """
+    # Never matched by question text alone, and only a user's answer counts: an agent can raise a decision with
+    # any question, and inside an envelope a provisional decision is answered by the envelope, not by the user.
     def number(identifier) -> int:
         digits = str(identifier or "").rpartition("-")[2]
         return int(digits) if digits.isdigit() else -1
@@ -183,7 +199,29 @@ def _replan_decided(project_name) -> bool:
     if newest.get("state") != "closed" or newest.get("resolution") != "reject":
         return False
     follow_ups = [i for i in issues if i.get("kind") == "decision" and i.get("exception") == newest.id]
+    if not follow_ups:
+        pm = (tracker.project(project_name) or {}).get("pm")
+        follow_ups = [i for i in issues if _legacy_follow_up(i, newest.id, project_name, pm)]
     return any(i.get("chosen") == "replan" and i.get("chosen_by") == "user" for i in follow_ups)
+
+
+def _legacy_follow_up(issue, exception_id, project_name, pm) -> bool:
+    """True when a decision has exactly the shape of the follow-up that version 1.0.0 wrote on a rejection."""
+    # Version 1.0.0 wrote the follow-up with no `exception` key, a fixed question, options, scope and origin, and
+    # `aligns` left empty. `ygg decision raise`, in 1.0.0 and since, always writes `aligns` as yes or no, and
+    # since this version it also marks every decision it writes with `raised_with`, so a decision an agent raised
+    # with the same question is never taken for the follow-up.
+    header = issue.header
+    return (issue.get("kind") == "decision"
+            and "exception" not in header
+            and "raised_with" not in header
+            and header.get("question") == "Exception " + str(exception_id) + " plan rejected: what next?"
+            and header.get("options") == ["replan", "close"]
+            and header.get("recommended") == "replan"
+            and header.get("reversible") is False
+            and "aligns" in header and header.get("aligns") is None
+            and header.get("scope") == {"type": "project", "id": project_name}
+            and bool(pm) and header.get("provenance") == {"type": "agent", "origin": pm})
 
 
 def _check_pid_ready_allowed(project):
@@ -382,6 +420,7 @@ def managed_input(file) -> Path:
     path = Path(file)
     if not path.is_absolute():
         path = Path.cwd() / path
+    _relayed_upload_check(path)
     caller = util.current_node()
     if caller is None:
         return path
@@ -396,6 +435,15 @@ def managed_input(file) -> Path:
         if os.path.commonpath([real, base]) == base:
             return path
     raise util.refuse("report must be inside the tracker or your worktree")
+
+
+def _relayed_upload_check(path) -> None:
+    """A relayed call (YGG_VIA_RELAY) names only its own request's uploads; anything else is refused on the text
+    of the path, before any file system access (v1.1.1, invariant T)."""
+    from . import relay
+    refusal = relay.relayed_file_refusal(path)
+    if refusal:
+        raise util.refuse(refusal)
 
 
 BODY_FILE_LIMIT = 1024 * 1024
@@ -451,6 +499,7 @@ def read_body_file(file) -> str:
         path = Path.cwd() / path
     if not path.name or path.name in (".", ".."):
         raise util.usage("body file must name a file: " + str(file))
+    _relayed_upload_check(path)
     managed = state.managed_session()
     folder = os.path.realpath(path.parent)
     real = os.path.join(folder, path.name)
@@ -781,7 +830,6 @@ def pid_approve(project_name):
     validate_pid(header)
     validate_delivery(project_name)
     from . import models
-    models.refuse_codex_project(project_name)  # D1: Codex builds are planned for a later release (A11 seam, AC-99 row 1)
     programme = tracker.programme(project["programme"]) or {}
     try:
         from . import mergecheck  # the merge-check module owns the rule (A11 AC-85 row 1)
@@ -1130,8 +1178,7 @@ def wp_authorise(project_name, package, lane):
     lane_node = nodes.get(lane)
     if not lane_node or lane_node.get("project") != project_name or lane_node.get("role") not in ("tl", "su"):
         raise util.usage("unknown lane '" + str(lane) + "' in project " + project_name)
-    from . import models
-    models.refuse_codex_builder(lane_node, package)  # D1: Codex builds are planned for a later release (A11 seam, AC-99 row 2)
+    codex_package_refusal(lane_node, package, nodes)  # v1.1.1: CB-D6 and CB-D9
     with util.locked():
         tracker.ensure_writable()
         issue = _package(project_name, package)

@@ -164,10 +164,8 @@ def test_codex_cli_uses_codex_model_map(world, monkeypatch):
     (world / "config.yaml").write_text("launch_confirm_seconds: 0.5\nlauncher_cli: codex\n")
     clear_caches()
     assert models.resolve("pm1")["model"].startswith("gpt")
-    # D1 (A11, ruling 134): a PM on a Codex model is refused in v1.0.
-    with pytest.raises(util.YggError) as error:
-        launcher.model_for(state.all_nodes()["pm1"])
-    assert models.CODEX_REFUSAL in error.value.message
+    # v1.1.1 (CB-D1): a PM on a Codex model runs on Codex; D1's refusal is gone.
+    assert launcher.model_for(state.all_nodes()["pm1"])[2] == "codex"
     (world / "config.yaml").write_text("launcher_cli: codex\ncodex_models: {model: claude-opus-5-5, effort: high}\n")
     clear_caches()
     with pytest.raises(util.YggError) as error:
@@ -175,7 +173,8 @@ def test_codex_cli_uses_codex_model_map(world, monkeypatch):
     assert "launcher_cli is codex" in error.value.message
 
 
-# dev2 #5: senior users and reviewers get workspace-write rooted in scratch plus the two management roots.
+# dev2 #5: senior users and reviewers get workspace-write rooted in scratch. v1.1.1 (CB-D3): the state and
+# tracker roots are no longer writable; a senior user's ygg calls go through the relay.
 def test_codex_sandbox_for_senior_users_adds_only_state_and_tracker(world):
     from yggdrasil import launcher
     data = {"activation": "act-0099", "role": "su",
@@ -183,7 +182,7 @@ def test_codex_sandbox_for_senior_users_adds_only_state_and_tracker(world):
     args = launcher.codex_sandbox(data, {"role": "su"})
     assert args[:2] == ["--sandbox", "workspace-write"]
     assert args[args.index("--cd") + 1].endswith("scratch/act-0099")
-    assert [args[i + 1] for i, a in enumerate(args) if a == "--add-dir"] == ["/s", "/t"]
+    assert [args[i + 1] for i, a in enumerate(args) if a == "--add-dir"] == []
     repo = world / "gitcheckout"
     repo.mkdir()
     subprocess.run(["git", "init", "-q", str(repo)], check=True)

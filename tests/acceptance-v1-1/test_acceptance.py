@@ -46,7 +46,7 @@ def test_ac01_version_ignores_config_and_managed_environment(d):
     d.write('broken.yaml', 'models: [')
     result = d.run('--version', env={'YGG_STATE_ROOT': d.path('state'),
                    'YGG_CONFIG': d.path('broken.yaml'), 'YGG_NODE': 'pm1tl1'})
-    assert result.stdout == 'ygg 1.1.0\n'
+    assert result.stdout == 'ygg 1.1.1\n'
     assert result.returncode == 0
     assert result.stderr == ''
     assert not d.exists(d.path('state'))
@@ -412,8 +412,8 @@ def test_ac14_plain_tool_install_runs_demo_in_empty_folder(d):
 @pytest.mark.ac('AC-14')
 def test_ac14_package_distribution_and_command_versions_agree(d):
     metadata, command = d.installed_versions()
-    assert metadata.stdout == '1.1.0 1.1.0\n'
-    assert command.stdout == 'ygg 1.1.0\n'
+    assert metadata.stdout == '1.1.1 1.1.1\n'
+    assert command.stdout == 'ygg 1.1.1\n'
 
 
 @mandatory

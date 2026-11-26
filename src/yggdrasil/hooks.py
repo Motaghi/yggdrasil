@@ -979,7 +979,7 @@ def _ancestors(path: str):
 
 INTERNAL_MESSAGE = "internal ygg command: agents may not run it"
 # ygg's internal verbs (AC-76 row 2): the hooks, the push guard, the lane check and the supervisor.
-INTERNAL_VERBS = {"hook", "push-guard", "lane-check", "_supervise"}
+INTERNAL_VERBS = {"hook", "push-guard", "lane-check", "_supervise", "_tend"}
 NO_VERIFY_MESSAGE = "git commit --no-verify is refused: Yggdrasil's lane check is quick, so commit without it"
 
 
